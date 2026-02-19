@@ -47,7 +47,8 @@
     ],
     "resources": {
       "../resources/backend": "backend",
-      "../resources/webui": "webui"
+      "../resources/webui": "webui",
+      "windows/kill-backend-processes.ps1": "kill-backend-processes.ps1"
     }
   }
 }

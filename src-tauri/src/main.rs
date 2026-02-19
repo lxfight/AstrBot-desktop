@@ -35,7 +35,9 @@ const GRACEFUL_RESTART_START_TIME_TIMEOUT_MS: u64 = 1_800;
 const GRACEFUL_RESTART_POLL_INTERVAL_MS: u64 = 350;
 const GRACEFUL_STOP_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_BACKEND_PING_TIMEOUT_MS: u64 = 800;
+const BACKEND_PING_TIMEOUT_ENV: &str = "ASTRBOT_BACKEND_PING_TIMEOUT_MS";
 const BRIDGE_BACKEND_PING_TIMEOUT_ENV: &str = "ASTRBOT_BRIDGE_BACKEND_PING_TIMEOUT_MS";
+const RUN_ON_MAIN_THREAD_TIMEOUT: Duration = Duration::from_secs(30);
 const DESKTOP_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 const BACKEND_LOG_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const LOG_BACKUP_COUNT: usize = 5;
@@ -50,6 +52,7 @@ const DEFAULT_SHELL_LOCALE: &str = "zh-CN";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(target_os = "windows")]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+static BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 static BRIDGE_BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 static MAIN_THREAD_ID: OnceLock<thread::ThreadId> = OnceLock::new();
 static DESKTOP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -147,7 +150,7 @@ impl Default for BackendState {
 
 impl BackendState {
     fn ensure_backend_ready(&self, app: &AppHandle) -> Result<(), String> {
-        if self.ping_backend(DEFAULT_BACKEND_PING_TIMEOUT_MS) {
+        if self.ping_backend(backend_ping_timeout_ms()) {
             append_desktop_log("backend already reachable, skip spawn");
             return Ok(());
         }
@@ -454,7 +457,7 @@ impl BackendState {
         let start_time = Instant::now();
 
         loop {
-            if self.ping_backend(DEFAULT_BACKEND_PING_TIMEOUT_MS) {
+            if self.ping_backend(backend_ping_timeout_ms()) {
                 return Ok(());
             }
 
@@ -766,7 +769,7 @@ Content-Length: {}\r\n\
             return self.stop_backend();
         }
 
-        if self.ping_backend(DEFAULT_BACKEND_PING_TIMEOUT_MS) {
+        if self.ping_backend(backend_ping_timeout_ms()) {
             return Err("Backend is running but not managed by desktop process.".to_string());
         }
         Ok(())
@@ -1763,20 +1766,36 @@ fn resolve_resource_path(app: &AppHandle, relative_path: &str) -> Option<PathBuf
     None
 }
 
+fn parse_ping_timeout_env(raw: &str, env_name: &str, fallback_ms: u64) -> u64 {
+    match raw.trim().parse::<u64>() {
+        Ok(timeout_ms) if timeout_ms > 0 => timeout_ms,
+        _ => {
+            append_desktop_log(&format!(
+                "invalid {}='{}', fallback to {}ms",
+                env_name, raw, fallback_ms
+            ));
+            fallback_ms
+        }
+    }
+}
+
+fn backend_ping_timeout_ms() -> u64 {
+    *BACKEND_PING_TIMEOUT_MS.get_or_init(|| match env::var(BACKEND_PING_TIMEOUT_ENV) {
+        Ok(raw) => parse_ping_timeout_env(
+            &raw,
+            BACKEND_PING_TIMEOUT_ENV,
+            DEFAULT_BACKEND_PING_TIMEOUT_MS,
+        ),
+        Err(_) => DEFAULT_BACKEND_PING_TIMEOUT_MS,
+    })
+}
+
 fn bridge_backend_ping_timeout_ms() -> u64 {
     *BRIDGE_BACKEND_PING_TIMEOUT_MS.get_or_init(|| {
+        let fallback = backend_ping_timeout_ms();
         match env::var(BRIDGE_BACKEND_PING_TIMEOUT_ENV) {
-            Ok(raw) => match raw.trim().parse::<u64>() {
-                Ok(timeout_ms) if timeout_ms > 0 => timeout_ms,
-                _ => {
-                    append_desktop_log(&format!(
-                        "invalid {}='{}', fallback to {}ms",
-                        BRIDGE_BACKEND_PING_TIMEOUT_ENV, raw, DEFAULT_BACKEND_PING_TIMEOUT_MS
-                    ));
-                    DEFAULT_BACKEND_PING_TIMEOUT_MS
-                }
-            },
-            Err(_) => DEFAULT_BACKEND_PING_TIMEOUT_MS,
+            Ok(raw) => parse_ping_timeout_env(&raw, BRIDGE_BACKEND_PING_TIMEOUT_ENV, fallback),
+            Err(_) => fallback,
         }
     })
 }
@@ -1832,15 +1851,33 @@ fn rotate_log_file_if_needed(path: &Path, max_bytes: u64, backup_count: usize) {
         return;
     }
 
-    let Ok(metadata) = fs::metadata(path) else {
-        return;
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "desktop log rotation: failed to read metadata for {}: {}",
+                    path.display(),
+                    error
+                );
+            }
+            return;
+        }
     };
     if metadata.len() < max_bytes {
         return;
     }
 
     let oldest = rotated_log_path(path, backup_count);
-    let _ = fs::remove_file(oldest);
+    if let Err(error) = fs::remove_file(&oldest) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "desktop log rotation: failed to remove oldest backup {}: {}",
+                oldest.display(),
+                error
+            );
+        }
+    }
 
     for index in (1..backup_count).rev() {
         let source = rotated_log_path(path, index);
@@ -1848,13 +1885,43 @@ fn rotate_log_file_if_needed(path: &Path, max_bytes: u64, backup_count: usize) {
             continue;
         }
         let target = rotated_log_path(path, index + 1);
-        let _ = fs::remove_file(&target);
-        let _ = fs::rename(&source, &target);
+        if let Err(error) = fs::remove_file(&target) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "desktop log rotation: failed to remove backup {}: {}",
+                    target.display(),
+                    error
+                );
+            }
+        }
+        if let Err(error) = fs::rename(&source, &target) {
+            eprintln!(
+                "desktop log rotation: failed to rename {} to {}: {}",
+                source.display(),
+                target.display(),
+                error
+            );
+        }
     }
 
     let rotated = rotated_log_path(path, 1);
-    let _ = fs::remove_file(&rotated);
-    let _ = fs::rename(path, rotated);
+    if let Err(error) = fs::remove_file(&rotated) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "desktop log rotation: failed to remove first backup {}: {}",
+                rotated.display(),
+                error
+            );
+        }
+    }
+    if let Err(error) = fs::rename(path, &rotated) {
+        eprintln!(
+            "desktop log rotation: failed to rotate {} to {}: {}",
+            path.display(),
+            rotated.display(),
+            error
+        );
+    }
 }
 
 fn rotated_log_path(path: &Path, index: usize) -> PathBuf {
@@ -1884,6 +1951,13 @@ fn show_startup_error_on_main_thread(app_handle: &AppHandle, message: &str) {
     }
 }
 
+/// Run an action on the main thread and wait for its result.
+///
+/// If called from the main thread, this executes `action` directly.
+///
+/// # Important
+/// The `action` must not block (directly or indirectly) on the calling thread.
+/// Doing so can create a circular dependency and deadlock.
 fn run_on_main_thread_with_result<T, F>(
     app_handle: &AppHandle,
     action_name: &str,
@@ -1910,6 +1984,14 @@ where
         .map_err(|error| format!("failed to schedule '{action_name}' on main thread: {error}"))?;
 
     receiver
-        .recv()
-        .map_err(|_| format!("failed to receive '{action_name}' result from main thread"))?
+        .recv_timeout(RUN_ON_MAIN_THREAD_TIMEOUT)
+        .map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => format!(
+                "timed out after {:?} waiting for '{action_name}' result from main thread",
+                RUN_ON_MAIN_THREAD_TIMEOUT
+            ),
+            mpsc::RecvTimeoutError::Disconnected => {
+                format!("failed to receive '{action_name}' result from main thread: channel disconnected")
+            }
+        })?
 }

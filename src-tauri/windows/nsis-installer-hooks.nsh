@@ -3,11 +3,13 @@
   StrCpy $0 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   IfFileExists "$0" +2 0
     StrCpy $0 "powershell.exe"
-  StrCpy $1 "$$installRoot = [System.IO.Path]::GetFullPath(''$INSTDIR'').TrimEnd([char]92).ToLower()"
-  StrCpy $2 "$$installRootWithSep = $$installRoot + [string][char]92"
-  StrCpy $3 "Get-CimInstance Win32_Process -Filter \"Name=''python.exe'' OR Name=''pythonw.exe''\""
-  StrCpy $4 "$3 | Where-Object { $$_.ExecutablePath } | ForEach-Object { $$exePath = [System.IO.Path]::GetFullPath($$_.ExecutablePath).ToLower(); if ($$exePath.StartsWith($$installRootWithSep) -or $$exePath -eq $$installRoot) { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue } }"
-  nsExec::ExecToLog '"$0" -NoProfile -ExecutionPolicy Bypass -Command "$1; $2; $4"'
+  StrCpy $1 "$INSTDIR\resources\kill-backend-processes.ps1"
+  IfFileExists "$1" +2 0
+    StrCpy $1 "$INSTDIR\_up_\resources\kill-backend-processes.ps1"
+  IfFileExists "$1" 0 +3
+    nsExec::ExecToLog '"$0" -NoProfile -ExecutionPolicy Bypass -File "$1" -InstallDir "$INSTDIR"'
+    Goto +2
+  DetailPrint "Skip backend process cleanup: script not found: $1"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

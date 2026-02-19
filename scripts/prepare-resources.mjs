@@ -414,10 +414,22 @@ const prepareBackend = async (sourceDir) => {
   }
 };
 
+const ensureStartupShellAssets = () => {
+  const startupUiDir = path.join(projectRoot, 'ui');
+  const requiredFiles = ['index.html', 'astrbot-logo.png'];
+  for (const file of requiredFiles) {
+    const candidate = path.join(startupUiDir, file);
+    if (!existsSync(candidate)) {
+      throw new Error(`Startup shell asset missing: ${candidate}`);
+    }
+  }
+};
+
 const main = async () => {
   const sourceDir = resolveSourceDir();
   await mkdir(path.join(projectRoot, 'resources'), { recursive: true });
   ensureSourceRepo(sourceDir);
+  ensureStartupShellAssets();
   const astrbotVersion = await readAstrbotVersionFromPyproject(sourceDir);
   await syncDesktopVersionFiles(astrbotVersion);
   console.log(`[prepare-resources] Synced desktop version to AstrBot ${astrbotVersion}`);
