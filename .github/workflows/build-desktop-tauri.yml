@@ -97,7 +97,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build desktop installers
+      - name: Build desktop installers (Linux)
+        if: startsWith(matrix.runner, 'ubuntu')
+        env:
+          ASTRBOT_SOURCE_GIT_URL: ${{ github.event.inputs.source_git_url || env.ASTRBOT_SOURCE_GIT_URL }}
+          ASTRBOT_SOURCE_GIT_REF: ${{ github.event.inputs.source_git_ref || env.ASTRBOT_SOURCE_GIT_REF }}
+        run: cargo tauri build --bundles deb,rpm
+
+      - name: Build desktop installers (Non-Linux)
+        if: ${{ !startsWith(matrix.runner, 'ubuntu') }}
         env:
           ASTRBOT_SOURCE_GIT_URL: ${{ github.event.inputs.source_git_url || env.ASTRBOT_SOURCE_GIT_URL }}
           ASTRBOT_SOURCE_GIT_REF: ${{ github.event.inputs.source_git_ref || env.ASTRBOT_SOURCE_GIT_REF }}

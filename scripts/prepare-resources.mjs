@@ -13,6 +13,7 @@ const PYTHON_BUILD_STANDALONE_RELEASE =
 const PYTHON_BUILD_STANDALONE_VERSION =
   process.env.ASTRBOT_PBS_VERSION?.trim() || '3.12.12';
 const mode = process.argv[2] || 'all';
+const PNPM_BIN = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -138,7 +139,7 @@ const ensurePackageInstall = (packageDir, installLabel) => {
   if (existsSync(lockfilePath)) {
     installArgs.push('--frozen-lockfile');
   }
-  runChecked('pnpm', installArgs, packageDir);
+  runChecked(PNPM_BIN, installArgs, packageDir);
 };
 
 const syncResourceDir = async (source, target) => {
@@ -323,7 +324,7 @@ const ensureBundledRuntime = () => {
 const prepareWebui = async (sourceDir) => {
   const dashboardDir = path.join(sourceDir, 'dashboard');
   ensurePackageInstall(dashboardDir, 'AstrBot dashboard');
-  runChecked('pnpm', ['--dir', dashboardDir, 'build'], sourceDir);
+  runChecked(PNPM_BIN, ['--dir', dashboardDir, 'build'], sourceDir);
 
   const sourceWebuiDir = path.join(sourceDir, 'dashboard', 'dist');
   if (!existsSync(path.join(sourceWebuiDir, 'index.html'))) {
