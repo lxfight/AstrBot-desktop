@@ -145,25 +145,27 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6.2.0
         with:
           python-version: '3.12'
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.2.0
         with:
           node-version: '20'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v4.2.0
         with:
           version: 10.28.2
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version 2.10.0 --locked
@@ -202,7 +204,7 @@ jobs:
         run: pnpm run build
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-${{ matrix.os_name }}-${{ matrix.arch }}
           if-no-files-found: error
@@ -226,7 +228,7 @@ jobs:
       contents: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7.0.0
         with:
           pattern: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-*
           path: release-artifacts
@@ -236,7 +238,7 @@ jobs:
         run: find release-artifacts -type f | sort
 
       - name: Create or update release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.5.0
         with:
           tag_name: v${{ needs.resolve_build_context.outputs.astrbot_version }}
           name: AstrBot Desktop v${{ needs.resolve_build_context.outputs.astrbot_version }}
