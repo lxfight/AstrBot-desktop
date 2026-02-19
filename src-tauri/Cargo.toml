@@ -1,6 +1,6 @@
 [package]
 name = "astrbot-desktop-tauri"
-version = "4.17.3"
+version = "4.17.5"
 description = "AstrBot desktop shell powered by Tauri"
 authors = ["AstrBot"]
 license = "AGPL-3.0"
@@ -13,6 +13,7 @@ build = "build.rs"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
+chrono = { version = "0.4", features = ["clock"] }
 dirs = "5.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

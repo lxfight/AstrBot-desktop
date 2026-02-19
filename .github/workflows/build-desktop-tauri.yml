@@ -11,7 +11,7 @@ on:
         description: AstrBot source git ref (branch/tag/sha)
         required: false
         default: master
-  push:
+  pull_request:
     branches:
       - main
       - master
@@ -41,16 +41,16 @@ jobs:
         include:
           - os_name: linux
             arch: amd64
-            runner: ubuntu-22.04
+            runner: ubuntu-latest
           - os_name: linux
             arch: arm64
             runner: ubuntu-24.04-arm
           - os_name: macos
             arch: amd64
-            runner: macos-13
+            runner: macos-latest
           - os_name: macos
             arch: arm64
-            runner: macos-14
+            runner: macos-latest
           - os_name: windows
             arch: amd64
             runner: windows-2022
@@ -97,10 +97,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build desktop installers
+      - name: Build desktop installers (Linux)
+        if: startsWith(matrix.runner, 'ubuntu')
         env:
           ASTRBOT_SOURCE_GIT_URL: ${{ github.event.inputs.source_git_url || env.ASTRBOT_SOURCE_GIT_URL }}
           ASTRBOT_SOURCE_GIT_REF: ${{ github.event.inputs.source_git_ref || env.ASTRBOT_SOURCE_GIT_REF }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: cargo tauri build --bundles deb,rpm
+
+      - name: Build desktop installers (Non-Linux)
+        if: ${{ !startsWith(matrix.runner, 'ubuntu') }}
+        env:
+          ASTRBOT_SOURCE_GIT_URL: ${{ github.event.inputs.source_git_url || env.ASTRBOT_SOURCE_GIT_URL }}
+          ASTRBOT_SOURCE_GIT_REF: ${{ github.event.inputs.source_git_ref || env.ASTRBOT_SOURCE_GIT_REF }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: pnpm run build
 
       - name: Upload artifacts
