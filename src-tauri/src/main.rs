@@ -1580,13 +1580,64 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
       authToken: typeof token === 'string' && token ? token : null
     });
 
+  const RUNTIME_BRIDGE_DETAIL_MAX_LENGTH = 240;
+
+  const truncateRuntimeBridgeDetail = (value) => {
+    if (typeof value !== 'string') {
+      return value;
+    }
+    if (value.length <= RUNTIME_BRIDGE_DETAIL_MAX_LENGTH) {
+      return value;
+    }
+    return `${value.slice(0, RUNTIME_BRIDGE_DETAIL_MAX_LENGTH)}...`;
+  };
+
+  const stringifyRuntimeBridgeDetail = (value) => {
+    if (!value || typeof value !== 'object') {
+      return `type=${Object.prototype.toString.call(value)}`;
+    }
+
+    try {
+      if (Array.isArray(value)) {
+        const sample = value.slice(0, 8);
+        const omitted = value.length > sample.length ? ` (+${value.length - sample.length} items)` : '';
+        return `${truncateRuntimeBridgeDetail(JSON.stringify(sample))}${omitted}`;
+      }
+
+      const keys = Object.keys(value);
+      const sampledKeys = keys.slice(0, 8);
+      const sampled = {};
+      for (const key of sampledKeys) {
+        const item = value[key];
+        if (
+          item === null ||
+          typeof item === 'string' ||
+          typeof item === 'number' ||
+          typeof item === 'boolean'
+        ) {
+          sampled[key] = item;
+        } else if (item instanceof Error) {
+          sampled[key] = `${item.name}: ${item.message}`;
+        } else if (Array.isArray(item)) {
+          sampled[key] = `[array:${item.length}]`;
+        } else {
+          sampled[key] = `[${typeof item}]`;
+        }
+      }
+      const omitted = keys.length > sampledKeys.length ? ` (+${keys.length - sampledKeys.length} keys)` : '';
+      return `${truncateRuntimeBridgeDetail(JSON.stringify(sampled))}${omitted}`;
+    } catch {
+      return `type=${Object.prototype.toString.call(value)}`;
+    }
+  };
+
   const sanitizeRuntimeBridgeDetail = (detail) => {
     if (detail instanceof Error) {
-      return `${detail.name}: ${detail.message}`;
+      return truncateRuntimeBridgeDetail(`${detail.name}: ${detail.message}`);
     }
 
     if (typeof detail === 'string') {
-      return detail;
+      return truncateRuntimeBridgeDetail(detail);
     }
 
     if (typeof detail === 'number' || typeof detail === 'boolean') {
@@ -1604,9 +1655,9 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
         if (hasReason) {
           summary.push(`reason=${detail.reason}`);
         }
-        return summary.join(' ');
+        return truncateRuntimeBridgeDetail(summary.join(' '));
       }
-      return `type=${Object.prototype.toString.call(detail)}`;
+      return stringifyRuntimeBridgeDetail(detail);
     }
 
     return String(detail);
@@ -1625,6 +1676,9 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
   const getStrictBooleanFallback = (command, fallbackValue) => {
     if (typeof fallbackValue === 'boolean') {
       return fallbackValue;
+    }
+    if (typeof fallbackValue === 'undefined') {
+      return false;
     }
 
     logRuntimeBridgeFallback(
