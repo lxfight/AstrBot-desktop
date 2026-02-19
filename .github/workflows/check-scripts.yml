@@ -18,14 +18,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.2
 
-      - name: Setup Node
-        uses: actions/setup-node@v6.2.0
+      - name: Setup Toolchains
+        uses: ./.github/actions/setup-toolchains
         with:
           node-version: '20'
-
-      - name: Setup Python
-        uses: actions/setup-python@v6.2.0
-        with:
           python-version: '3.12'
 
       - name: Check Node scripts syntax
@@ -38,7 +34,7 @@ jobs:
           while IFS= read -r file; do
             echo "Checking ${file}"
             node --check "${file}"
-          done < <(find scripts -type f -name '*.mjs' | sort)
+          done < <(find scripts -type f \( -name '*.mjs' -o -name '*.cjs' -o -name '*.js' \) | sort)
 
       - name: Check Python scripts syntax
         run: |

@@ -1,0 +1,35 @@
+name: Setup Toolchains
+description: Setup Node.js and/or Python toolchains for CI jobs.
+
+inputs:
+  setup-node:
+    description: Whether to setup Node.js.
+    required: false
+    default: 'true'
+  node-version:
+    description: Node.js version.
+    required: false
+    default: '20'
+  setup-python:
+    description: Whether to setup Python.
+    required: false
+    default: 'true'
+  python-version:
+    description: Python version.
+    required: false
+    default: '3.12'
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      if: ${{ inputs.setup-node == 'true' }}
+      uses: actions/setup-node@v6.2.0
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Setup Python
+      if: ${{ inputs.setup-python == 'true' }}
+      uses: actions/setup-python@v6.2.0
+      with:
+        python-version: ${{ inputs.python-version }}
