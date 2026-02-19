@@ -10,6 +10,6 @@
     "prepare:backend": "node scripts/prepare-resources.mjs backend",
     "prepare:resources": "pnpm run prepare:webui && pnpm run prepare:backend",
     "dev": "cargo tauri dev",
-    "build": "pnpm run prepare:resources && cargo tauri build"
+    "build": "cargo tauri build"
   }
 }

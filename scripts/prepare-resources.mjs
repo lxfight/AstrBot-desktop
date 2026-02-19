@@ -4,7 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-const sourceRepoUrlRaw = process.env.ASTRBOT_SOURCE_GIT_URL?.trim() || '';
+const DEFAULT_ASTRBOT_SOURCE_GIT_URL = 'https://github.com/AstrBotDevs/AstrBot.git';
+const sourceRepoUrlRaw =
+  process.env.ASTRBOT_SOURCE_GIT_URL?.trim() || DEFAULT_ASTRBOT_SOURCE_GIT_URL;
 const sourceRepoRefRaw = process.env.ASTRBOT_SOURCE_GIT_REF?.trim() || '';
 const PYTHON_BUILD_STANDALONE_RELEASE =
   process.env.ASTRBOT_PBS_RELEASE?.trim() || '20260211';
@@ -56,12 +58,6 @@ const ensureSourceRepo = (sourceDir) => {
       );
     }
     return;
-  }
-
-  if (!sourceRepoUrl) {
-    throw new Error(
-      'Missing ASTRBOT_SOURCE_GIT_URL. Set it to the upstream AstrBot git repository URL.',
-    );
   }
 
   if (!existsSync(path.join(sourceDir, '.git'))) {

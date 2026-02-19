@@ -16,7 +16,12 @@ on:
       - main
       - master
     paths:
-      - 'desktop-tauri/**'
+      - 'scripts/**'
+      - 'src-tauri/**'
+      - 'ui/**'
+      - 'resources/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
       - '.github/workflows/build-desktop-tauri.yml'
 
 permissions:
@@ -89,14 +94,14 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Install desktop-tauri dependencies
-        run: pnpm --dir desktop-tauri install
+      - name: Install dependencies
+        run: pnpm install
 
       - name: Build desktop installers
         env:
           ASTRBOT_SOURCE_GIT_URL: ${{ github.event.inputs.source_git_url || env.ASTRBOT_SOURCE_GIT_URL }}
           ASTRBOT_SOURCE_GIT_REF: ${{ github.event.inputs.source_git_ref || env.ASTRBOT_SOURCE_GIT_REF }}
-        run: pnpm --dir desktop-tauri run build
+        run: pnpm run build
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -104,10 +109,10 @@ jobs:
           name: astrbot-desktop-tauri-${{ matrix.os_name }}-${{ matrix.arch }}
           if-no-files-found: error
           path: |
-            desktop-tauri/src-tauri/target/release/bundle/dmg/*.dmg
-            desktop-tauri/src-tauri/target/release/bundle/**/*.app.tar.gz
-            desktop-tauri/src-tauri/target/release/bundle/**/*.AppImage
-            desktop-tauri/src-tauri/target/release/bundle/**/*.deb
-            desktop-tauri/src-tauri/target/release/bundle/**/*.rpm
-            desktop-tauri/src-tauri/target/release/bundle/**/*.msi
-            desktop-tauri/src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/**/*.app.tar.gz
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
