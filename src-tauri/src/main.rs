@@ -1880,89 +1880,17 @@ fn append_desktop_log(message: &str) {
         .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
 }
 
-fn rotate_log_file_if_needed(path: &Path, max_bytes: u64, backup_count: usize, log_scope: &str) {
-    if max_bytes == 0 || backup_count == 0 {
-        return;
-    }
-
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "[log rotation:{log_scope}] failed to read metadata for {}: {}",
-                    path.display(),
-                    error
-                );
-            }
-            return;
-        }
-    };
-    if metadata.len() < max_bytes {
-        return;
-    }
-
-    let oldest = rotated_log_path(path, backup_count);
-    if let Err(error) = fs::remove_file(&oldest) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            eprintln!(
-                "[log rotation:{log_scope}] failed to remove oldest backup {}: {}",
-                oldest.display(),
-                error
-            );
-        }
-    }
-
-    for index in (1..backup_count).rev() {
-        let source = rotated_log_path(path, index);
-        if !source.exists() {
-            continue;
-        }
-        let target = rotated_log_path(path, index + 1);
-        if let Err(error) = fs::remove_file(&target) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "[log rotation:{log_scope}] failed to remove backup {}: {}",
-                    target.display(),
-                    error
-                );
-            }
-        }
-        if let Err(error) = fs::rename(&source, &target) {
-            eprintln!(
-                "[log rotation:{log_scope}] failed to rename {} to {}: {}",
-                source.display(),
-                target.display(),
-                error
-            );
-        }
-    }
-
-    let rotated = rotated_log_path(path, 1);
-    if let Err(error) = fs::remove_file(&rotated) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            eprintln!(
-                "[log rotation:{log_scope}] failed to remove first backup {}: {}",
-                rotated.display(),
-                error
-            );
-        }
-    }
-    if let Err(error) = fs::rename(path, &rotated) {
-        eprintln!(
-            "[log rotation:{log_scope}] failed to rotate {} to {}: {}",
-            path.display(),
-            rotated.display(),
-            error
-        );
-    }
+enum RotationMode {
+    Rename,
+    CopyAndTruncate,
 }
 
-fn rotate_active_log_file_if_needed(
+fn rotate_log_core(
     path: &Path,
     max_bytes: u64,
     backup_count: usize,
     log_scope: &str,
+    mode: RotationMode,
 ) {
     if max_bytes == 0 || backup_count == 0 {
         return;
@@ -2031,21 +1959,61 @@ fn rotate_active_log_file_if_needed(
             );
         }
     }
-    if let Err(error) = fs::copy(path, &rotated) {
-        eprintln!(
-            "[log rotation:{log_scope}] failed to copy {} to {}: {}",
-            path.display(),
-            rotated.display(),
-            error
-        );
+
+    match mode {
+        RotationMode::Rename => {
+            if let Err(error) = fs::rename(path, &rotated) {
+                eprintln!(
+                    "[log rotation:{log_scope}] failed to rotate {} to {}: {}",
+                    path.display(),
+                    rotated.display(),
+                    error
+                );
+            }
+        }
+        RotationMode::CopyAndTruncate => {
+            if let Err(error) = fs::copy(path, &rotated) {
+                eprintln!(
+                    "[log rotation:{log_scope}] failed to copy {} to {}: {}",
+                    path.display(),
+                    rotated.display(),
+                    error
+                );
+            }
+            if let Err(error) = OpenOptions::new().write(true).truncate(true).open(path) {
+                eprintln!(
+                    "[log rotation:{log_scope}] failed to truncate active log {}: {}",
+                    path.display(),
+                    error
+                );
+            }
+        }
     }
-    if let Err(error) = OpenOptions::new().write(true).truncate(true).open(path) {
-        eprintln!(
-            "[log rotation:{log_scope}] failed to truncate active log {}: {}",
-            path.display(),
-            error
-        );
-    }
+}
+
+fn rotate_log_file_if_needed(path: &Path, max_bytes: u64, backup_count: usize, log_scope: &str) {
+    rotate_log_core(
+        path,
+        max_bytes,
+        backup_count,
+        log_scope,
+        RotationMode::Rename,
+    );
+}
+
+fn rotate_active_log_file_if_needed(
+    path: &Path,
+    max_bytes: u64,
+    backup_count: usize,
+    log_scope: &str,
+) {
+    rotate_log_core(
+        path,
+        max_bytes,
+        backup_count,
+        log_scope,
+        RotationMode::CopyAndTruncate,
+    );
 }
 
 fn rotated_log_path(path: &Path, index: usize) -> PathBuf {
