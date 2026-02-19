@@ -54,7 +54,6 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 static BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 static BRIDGE_BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
-static MAIN_THREAD_ID: OnceLock<thread::ThreadId> = OnceLock::new();
 static DESKTOP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
@@ -791,7 +790,7 @@ Content-Length: {}\r\n\
         }
     }
 
-    fn managed_child_still_running(&self, child_pid: u32) -> bool {
+    fn child_matches_pid_and_alive(&self, child_pid: u32) -> bool {
         let mut guard = match self.child.lock() {
             Ok(guard) => guard,
             Err(error) => {
@@ -815,7 +814,6 @@ Content-Length: {}\r\n\
                 append_desktop_log(&format!(
                     "backend process exited, stop log rotator worker: pid={child_pid}, status={status}"
                 ));
-                *guard = None;
                 false
             }
             Err(error) => {
@@ -854,21 +852,13 @@ Content-Length: {}\r\n\
                 if stop_flag.load(Ordering::Relaxed) {
                     break;
                 }
-                {
-                    let state = app_handle.state::<BackendState>();
-                    if !state.managed_child_still_running(child_pid) {
-                        break;
-                    }
-                }
                 thread::sleep(BACKEND_LOG_ROTATION_CHECK_INTERVAL);
                 if stop_flag.load(Ordering::Relaxed) {
                     break;
                 }
-                {
-                    let state = app_handle.state::<BackendState>();
-                    if !state.managed_child_still_running(child_pid) {
-                        break;
-                    }
+                let state = app_handle.state::<BackendState>();
+                if !state.child_matches_pid_and_alive(child_pid) {
+                    break;
                 }
                 rotate_log_if_needed(
                     &log_path,
@@ -1040,7 +1030,6 @@ fn desktop_bridge_stop_backend(app_handle: AppHandle) -> BackendBridgeResult {
 }
 
 fn main() {
-    let _ = MAIN_THREAD_ID.set(thread::current().id());
     append_desktop_log("desktop process starting");
     append_desktop_log(&format!(
         "desktop log path: {}",
@@ -2118,13 +2107,6 @@ fn run_on_main_thread_dispatch<F>(
 where
     F: FnOnce(&AppHandle) + Send + 'static,
 {
-    let current_thread_id = thread::current().id();
-    let main_thread_id = MAIN_THREAD_ID.get().copied();
-    if main_thread_id.is_none() || main_thread_id == Some(current_thread_id) {
-        action(app_handle);
-        return Ok(());
-    }
-
     let app_handle_for_main = app_handle.clone();
     app_handle
         .run_on_main_thread(move || {
