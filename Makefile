@@ -87,8 +87,6 @@ clean-rust:
 
 clean-resources:
 	rm -rf resources/backend resources/webui
-	mkdir -p resources/backend resources/webui
-	touch resources/backend/.gitkeep resources/webui/.gitkeep
 
 clean-vendor-local:
 	rm -rf vendor/AstrBot-local
