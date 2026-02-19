@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Deserialize;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
     borrow::Cow,
     env,
@@ -16,8 +18,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     path::BaseDirectory,
@@ -795,7 +795,11 @@ Content-Length: {}\r\n\
     }
 
     fn bridge_state(&self, app: &AppHandle) -> BackendBridgeState {
-        let has_managed_child = self.child.lock().map(|guard| guard.is_some()).unwrap_or(false);
+        let has_managed_child = self
+            .child
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false);
         let can_manage = has_managed_child || self.resolve_launch_plan(app).is_ok();
         BackendBridgeState {
             running: self.ping_backend(BRIDGE_BACKEND_PING_TIMEOUT_MS),
