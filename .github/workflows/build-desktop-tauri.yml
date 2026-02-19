@@ -143,10 +143,10 @@ jobs:
             runner: ubuntu-24.04-arm
           - os_name: macos
             arch: amd64
-            runner: macos-latest
+            runner: macos-13
           - os_name: macos
             arch: arm64
-            runner: macos-latest
+            runner: macos-14
           - os_name: windows
             arch: amd64
             runner: windows-2022
@@ -249,7 +249,7 @@ jobs:
     needs:
       - resolve_build_context
       - build
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     permissions:
       contents: write
     steps:
@@ -262,6 +262,48 @@ jobs:
 
       - name: Show artifacts
         run: find release-artifacts -type f | sort
+
+      - name: Validate artifact filename uniqueness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - << 'PY'
+          import os
+          import sys
+          from collections import defaultdict
+
+          root = "release-artifacts"
+          by_name = defaultdict(list)
+          for dirpath, _, filenames in os.walk(root):
+            for filename in filenames:
+              by_name[filename].append(os.path.join(dirpath, filename))
+
+          duplicates = {name: paths for name, paths in by_name.items() if len(paths) > 1}
+          if duplicates:
+            print("Duplicate artifact filenames detected after merge:", file=sys.stderr)
+            for name, paths in sorted(duplicates.items()):
+              print(f"- {name}", file=sys.stderr)
+              for path in sorted(paths):
+                print(f"  - {path}", file=sys.stderr)
+            sys.exit(1)
+
+          print("No duplicate artifact filenames detected.")
+          PY
+
+      - name: Verify DMG integrity before release upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmg_files=(release-artifacts/*.dmg)
+          if [ "${#dmg_files[@]}" -eq 0 ]; then
+            echo "No DMG files found in release-artifacts"
+          fi
+
+          for dmg in "${dmg_files[@]}"; do
+            echo "Verifying ${dmg}"
+            hdiutil verify "${dmg}"
+          done
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2.5.0
