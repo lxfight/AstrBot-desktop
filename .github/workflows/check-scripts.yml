@@ -1,0 +1,46 @@
+name: Check Scripts
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    name: node + python syntax checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Setup Toolchains
+        uses: ./.github/actions/setup-toolchains
+        with:
+          node-version: '20'
+          python-version: '3.12'
+
+      - name: Check Node scripts syntax
+        run: |
+          set -euo pipefail
+          if [ ! -d scripts ]; then
+            echo "scripts directory does not exist, skip Node scripts check."
+            exit 0
+          fi
+          while IFS= read -r -d '' file; do
+            echo "Checking ${file}"
+            node --check "${file}"
+          done < <(find scripts -type f \( -name '*.mjs' -o -name '*.cjs' -o -name '*.js' \) -print0 | sort -z)
+
+      - name: Check Python scripts syntax
+        run: |
+          set -euo pipefail
+          if [ ! -d scripts ]; then
+            echo "scripts directory does not exist, skip Python scripts check."
+            exit 0
+          fi
+          python3 -m compileall -q scripts
