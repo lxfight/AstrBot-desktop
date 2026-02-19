@@ -1,5 +1,16 @@
-SHELL := /bin/bash
 .DEFAULT_GOAL := help
+
+VENDOR_DIR ?= vendor
+RUNTIME_DIR ?= runtime
+RESOURCES_DIR ?= resources
+RESOURCES_BACKEND_DIR ?= $(RESOURCES_DIR)/backend
+RESOURCES_WEBUI_DIR ?= $(RESOURCES_DIR)/webui
+ASTRBOT_LOCAL_DIR ?= $(VENDOR_DIR)/AstrBot-local
+ASTRBOT_LOCAL_DESKTOP_DIR ?= $(ASTRBOT_LOCAL_DIR)/desktop
+RUST_MANIFEST ?= src-tauri/Cargo.toml
+NODE_MODULES_DIR ?= node_modules
+PNPM_STORE_DIR ?= .pnpm-store
+TAURI_TARGET_DIR ?= src-tauri/target
 
 .PHONY: help deps sync-version prepare-webui prepare-backend prepare-resources dev build \
 	prepare rebuild lint test doctor prune size clean clean-rust clean-resources \
@@ -57,11 +68,11 @@ build:
 rebuild: clean build
 
 lint:
-	cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-	cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+	cargo fmt --manifest-path $(RUST_MANIFEST) --all -- --check
+	cargo clippy --manifest-path $(RUST_MANIFEST) --locked --all-targets -- -D warnings
 
 test:
-	cargo test --manifest-path src-tauri/Cargo.toml --locked
+	cargo test --manifest-path $(RUST_MANIFEST) --locked
 
 doctor:
 	@echo "node:  $$(node -v)"
@@ -70,32 +81,32 @@ doctor:
 	@echo "cargo: $$(cargo -V)"
 
 prune:
-	rm -rf vendor/AstrBot-local runtime
+	rm -rf $(ASTRBOT_LOCAL_DIR) $(RUNTIME_DIR)
 
 size:
 	@echo "== project size =="
-	@du -sh vendor runtime resources src-tauri/target 2>/dev/null || true
+	@du -sh $(VENDOR_DIR) $(RUNTIME_DIR) $(RESOURCES_DIR) $(TAURI_TARGET_DIR) 2>/dev/null || true
 	@echo ""
 	@echo "== vendor top =="
-	@du -sh vendor/* 2>/dev/null | sort -h | tail -n 20 || true
+	@du -sh $(VENDOR_DIR)/* 2>/dev/null | sort -h | tail -n 20 || true
 	@echo ""
-	@echo "== vendor/AstrBot-local/desktop top =="
-	@du -sh vendor/AstrBot-local/desktop/* 2>/dev/null | sort -h | tail -n 20 || true
+	@echo "== $(ASTRBOT_LOCAL_DESKTOP_DIR) top =="
+	@du -sh $(ASTRBOT_LOCAL_DESKTOP_DIR)/* 2>/dev/null | sort -h | tail -n 20 || true
 
 clean-rust:
-	cargo clean --manifest-path src-tauri/Cargo.toml
+	cargo clean --manifest-path $(RUST_MANIFEST)
 
 clean-resources:
-	rm -rf resources/backend resources/webui
+	rm -rf $(RESOURCES_BACKEND_DIR) $(RESOURCES_WEBUI_DIR)
 
 clean-vendor-local:
-	rm -rf vendor/AstrBot-local
+	rm -rf $(ASTRBOT_LOCAL_DIR)
 
 clean-vendor:
-	rm -rf vendor runtime
+	rm -rf $(VENDOR_DIR) $(RUNTIME_DIR)
 
 clean-node:
-	rm -rf node_modules .pnpm-store
+	rm -rf $(NODE_MODULES_DIR) $(PNPM_STORE_DIR)
 
 clean: clean-rust clean-resources clean-vendor clean-node
 
