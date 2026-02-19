@@ -13,7 +13,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex,
+        mpsc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, Instant},
@@ -33,7 +33,8 @@ const GRACEFUL_RESTART_REQUEST_TIMEOUT_MS: u64 = 2_500;
 const GRACEFUL_RESTART_START_TIME_TIMEOUT_MS: u64 = 1_800;
 const GRACEFUL_RESTART_POLL_INTERVAL_MS: u64 = 350;
 const GRACEFUL_STOP_TIMEOUT_MS: u64 = 10_000;
-const BRIDGE_BACKEND_PING_TIMEOUT_MS: u64 = 180;
+const BACKEND_PING_TIMEOUT_MS: u64 = 800;
+const BRIDGE_BACKEND_PING_TIMEOUT_DEFAULT_MS: u64 = 800;
 const DESKTOP_LOG_FILE: &str = "desktop.log";
 const TRAY_ID: &str = "astrbot-tray";
 const TRAY_MENU_TOGGLE_WINDOW: &str = "tray_toggle_window";
@@ -45,6 +46,7 @@ const DEFAULT_SHELL_LOCALE: &str = "zh-CN";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(target_os = "windows")]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+static BRIDGE_BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 struct ShellTexts {
@@ -139,7 +141,7 @@ impl Default for BackendState {
 
 impl BackendState {
     fn ensure_backend_ready(&self, app: &AppHandle) -> Result<(), String> {
-        if self.ping_backend(800) {
+        if self.ping_backend(BACKEND_PING_TIMEOUT_MS) {
             append_desktop_log("backend already reachable, skip spawn");
             return Ok(());
         }
@@ -554,7 +556,7 @@ Content-Type: application/json\r\n\
 Content-Length: {}\r\n\
 \r\n\
 {}",
-            payload.as_bytes().len(),
+            payload.len(),
             payload
         );
         if stream.write_all(request.as_bytes()).is_err() {
@@ -755,7 +757,7 @@ Content-Length: {}\r\n\
             return self.stop_backend();
         }
 
-        if self.ping_backend(800) {
+        if self.ping_backend(BACKEND_PING_TIMEOUT_MS) {
             return Err("Backend is running but not managed by desktop process.".to_string());
         }
         Ok(())
@@ -802,7 +804,7 @@ Content-Length: {}\r\n\
             .unwrap_or(false);
         let can_manage = has_managed_child || self.resolve_launch_plan(app).is_ok();
         BackendBridgeState {
-            running: self.ping_backend(BRIDGE_BACKEND_PING_TIMEOUT_MS),
+            running: self.ping_backend(bridge_backend_ping_timeout_ms()),
             spawning: self.is_spawning.load(Ordering::Relaxed),
             restarting: self.is_restarting.load(Ordering::Relaxed),
             can_manage,
@@ -927,14 +929,14 @@ fn main() {
                     }
 
                     api.prevent_close();
-                    hide_main_window(&app_handle);
+                    hide_main_window(app_handle);
                 }
                 WindowEvent::Focused(false) => {
                     if let Ok(true) = window.is_minimized() {
                         let app_handle = window.app_handle();
                         let state = app_handle.state::<BackendState>();
                         if !state.is_quitting() {
-                            hide_main_window(&app_handle);
+                            hide_main_window(app_handle);
                         }
                     }
                 }
@@ -959,15 +961,29 @@ fn main() {
             }
 
             let startup_app_handle = app_handle.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                let state = startup_app_handle.state::<BackendState>();
-                if let Err(error) = state.ensure_backend_ready(&startup_app_handle) {
-                    show_startup_error(&startup_app_handle, &error);
-                    return;
-                }
+            tauri::async_runtime::spawn(async move {
+                let startup_worker_handle = startup_app_handle.clone();
+                let startup_result = tauri::async_runtime::spawn_blocking(move || {
+                    let state = startup_worker_handle.state::<BackendState>();
+                    state.ensure_backend_ready(&startup_worker_handle)
+                })
+                .await
+                .map_err(|error| format!("Backend startup task failed: {error}"))
+                .and_then(|result| result);
 
-                if let Err(error) = navigate_main_window_to_backend(&startup_app_handle) {
-                    show_startup_error(&startup_app_handle, &error);
+                match startup_result {
+                    Ok(()) => {
+                        if let Err(error) = run_on_main_thread_with_result(
+                            &startup_app_handle,
+                            "navigate backend",
+                            navigate_main_window_to_backend,
+                        ) {
+                            show_startup_error_on_main_thread(&startup_app_handle, &error);
+                        }
+                    }
+                    Err(error) => {
+                        show_startup_error_on_main_thread(&startup_app_handle, &error);
+                    }
                 }
             });
             Ok(())
@@ -1063,7 +1079,7 @@ fn setup_tray(app_handle: &AppHandle) -> Result<(), String> {
         append_desktop_log("tray menu state already exists, skipping manage");
     }
 
-    let mut tray_builder = TrayIconBuilder::with_id(TRAY_ID)
+    let tray_builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("AstrBot")
         .icon(tauri::include_image!("./icons/tray.png"))
@@ -1084,9 +1100,7 @@ fn setup_tray(app_handle: &AppHandle) -> Result<(), String> {
         });
 
     #[cfg(target_os = "macos")]
-    {
-        tray_builder = tray_builder.icon_as_template(true);
-    }
+    let tray_builder = tray_builder.icon_as_template(true);
 
     tray_builder
         .build(app_handle)
@@ -1734,6 +1748,16 @@ fn resolve_resource_path(app: &AppHandle, relative_path: &str) -> Option<PathBuf
     None
 }
 
+fn bridge_backend_ping_timeout_ms() -> u64 {
+    *BRIDGE_BACKEND_PING_TIMEOUT_MS.get_or_init(|| {
+        env::var("ASTRBOT_BRIDGE_BACKEND_PING_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|timeout_ms| *timeout_ms > 0)
+            .unwrap_or(BRIDGE_BACKEND_PING_TIMEOUT_DEFAULT_MS)
+    })
+}
+
 fn desktop_log_path() -> PathBuf {
     if let Ok(custom) = env::var("ASTRBOT_DESKTOP_LOG_PATH") {
         let candidate = PathBuf::from(custom.trim());
@@ -1779,4 +1803,42 @@ fn show_startup_error(app_handle: &AppHandle, message: &str) {
     append_desktop_log(&format!("startup error: {}", message));
     eprintln!("AstrBot startup failed: {message}");
     app_handle.exit(1);
+}
+
+fn show_startup_error_on_main_thread(app_handle: &AppHandle, message: &str) {
+    let message_owned = message.to_string();
+    if let Err(error) =
+        run_on_main_thread_with_result(app_handle, "show startup error", move |main_app| {
+            show_startup_error(main_app, &message_owned);
+            Ok(())
+        })
+    {
+        append_desktop_log(&format!(
+            "failed to dispatch startup error handling to main thread: {error}"
+        ));
+        show_startup_error(app_handle, message);
+    }
+}
+
+fn run_on_main_thread_with_result<T, F>(
+    app_handle: &AppHandle,
+    action_name: &str,
+    action: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&AppHandle) -> Result<T, String> + Send + 'static,
+{
+    let app_handle_for_main = app_handle.clone();
+    let (sender, receiver) = mpsc::channel();
+    app_handle
+        .run_on_main_thread(move || {
+            let result = action(&app_handle_for_main);
+            let _ = sender.send(result);
+        })
+        .map_err(|error| format!("failed to schedule '{action_name}' on main thread: {error}"))?;
+
+    receiver
+        .recv()
+        .map_err(|_| format!("failed to receive '{action_name}' result from main thread"))?
 }

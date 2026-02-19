@@ -1,6 +1,11 @@
 !macro NSIS_HOOK_PREUNINSTALL
   ; Ensure packaged backend processes do not keep install files locked during uninstall.
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name=''python.exe'' OR Name=''pythonw.exe''\" | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.ToLower().StartsWith(''$INSTDIR''.ToLower()) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"'
+  StrCpy $0 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  StrCpy $1 "$$installRoot = ''$INSTDIR''.ToLower()"
+  StrCpy $2 "Get-CimInstance Win32_Process -Filter \"Name=''python.exe'' OR Name=''pythonw.exe''\""
+  StrCpy $3 "$2 | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.ToLower().StartsWith($$installRoot) }"
+  StrCpy $4 "$3 | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"
+  nsExec::ExecToLog '"$0" -NoProfile -ExecutionPolicy Bypass -Command "$1; $4"'
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

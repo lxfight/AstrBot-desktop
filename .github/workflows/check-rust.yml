@@ -79,7 +79,14 @@ jobs:
           fi
 
           if [ ! -f resources/backend/runtime-manifest.json ]; then
-            printf '%s\n' '{}' > resources/backend/runtime-manifest.json
+            cat > resources/backend/runtime-manifest.json <<'EOF'
+{
+  "mode": "ci-placeholder",
+  "python": "python/bin/python3",
+  "entrypoint": "launch_backend.py",
+  "app": "app"
+}
+EOF
           fi
 
       - name: rustfmt
