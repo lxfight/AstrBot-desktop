@@ -75,6 +75,7 @@ struct LaunchPlan {
 struct BackendState {
     child: Mutex<Option<Child>>,
     backend_url: String,
+    restart_auth_token: Mutex<Option<String>>,
     is_quitting: AtomicBool,
     is_spawning: AtomicBool,
     is_restarting: AtomicBool,
@@ -120,6 +121,7 @@ impl Default for BackendState {
                 &env::var("ASTRBOT_BACKEND_URL")
                     .unwrap_or_else(|_| DEFAULT_BACKEND_URL.to_string()),
             ),
+            restart_auth_token: Mutex::new(None),
             is_quitting: AtomicBool::new(false),
             is_spawning: AtomicBool::new(false),
             is_restarting: AtomicBool::new(false),
@@ -489,13 +491,14 @@ impl BackendState {
             .any(|address| TcpStream::connect_timeout(address, timeout).is_ok())
     }
 
-    fn request_backend_json(
+    fn request_backend_response_bytes(
         &self,
         method: &str,
         api_path: &str,
         timeout_ms: u64,
         body: Option<&str>,
-    ) -> Option<serde_json::Value> {
+        auth_token: Option<&str>,
+    ) -> Option<Vec<u8>> {
         let base = Url::parse(&self.backend_url).ok()?;
         let request_url = base.join(api_path).ok()?;
         if request_url.scheme() != "http" {
@@ -522,12 +525,18 @@ impl BackendState {
         }
 
         let payload = body.unwrap_or("");
+        let authorization_header = auth_token
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(|token| format!("Authorization: Bearer {token}\r\n"))
+            .unwrap_or_default();
         let request = format!(
             "{method} {request_target} HTTP/1.1\r\n\
 Host: {host}\r\n\
 Accept: application/json\r\n\
 Accept-Encoding: identity\r\n\
 Connection: close\r\n\
+{authorization_header}\
 Content-Type: application/json\r\n\
 Content-Length: {}\r\n\
 \r\n\
@@ -544,7 +553,33 @@ Content-Length: {}\r\n\
             return None;
         }
 
+        Some(response)
+    }
+
+    fn request_backend_json(
+        &self,
+        method: &str,
+        api_path: &str,
+        timeout_ms: u64,
+        body: Option<&str>,
+        auth_token: Option<&str>,
+    ) -> Option<serde_json::Value> {
+        let response =
+            self.request_backend_response_bytes(method, api_path, timeout_ms, body, auth_token)?;
         parse_http_json_response(&response)
+    }
+
+    fn request_backend_status_code(
+        &self,
+        method: &str,
+        api_path: &str,
+        timeout_ms: u64,
+        body: Option<&str>,
+        auth_token: Option<&str>,
+    ) -> Option<u16> {
+        let response =
+            self.request_backend_response_bytes(method, api_path, timeout_ms, body, auth_token)?;
+        parse_http_status_code(&response)
     }
 
     fn fetch_backend_start_time(&self) -> Option<i64> {
@@ -553,24 +588,62 @@ Content-Length: {}\r\n\
             "/api/stat/start-time",
             GRACEFUL_RESTART_START_TIME_TIMEOUT_MS,
             None,
+            None,
         )?;
         parse_backend_start_time(&payload)
     }
 
-    fn request_graceful_restart(&self) -> bool {
-        let payload = self.request_backend_json(
+    fn sanitize_auth_token(auth_token: Option<&str>) -> Option<String> {
+        auth_token
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(|token| token.to_string())
+    }
+
+    fn resolve_restart_auth_token(&self, provided_auth_token: Option<&str>) -> Option<String> {
+        if let Some(token) = Self::sanitize_auth_token(provided_auth_token) {
+            if let Ok(mut guard) = self.restart_auth_token.lock() {
+                *guard = Some(token.clone());
+            }
+            return Some(token);
+        }
+
+        self.restart_auth_token
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    fn set_restart_auth_token(&self, provided_auth_token: Option<&str>) {
+        let normalized = Self::sanitize_auth_token(provided_auth_token);
+        if let Ok(mut guard) = self.restart_auth_token.lock() {
+            *guard = normalized;
+        }
+    }
+
+    fn request_graceful_restart(&self, auth_token: Option<&str>) -> bool {
+        let status_code = self.request_backend_status_code(
             "POST",
             "/api/stat/restart-core",
             GRACEFUL_RESTART_REQUEST_TIMEOUT_MS,
             Some("{}"),
+            auth_token,
         );
-        matches!(
-            payload
-                .as_ref()
-                .and_then(|value| value.get("status"))
-                .and_then(|value| value.as_str()),
-            Some("ok")
-        )
+        match status_code {
+            Some(code) if (200..300).contains(&code) => true,
+            Some(code) => {
+                append_desktop_log(&format!(
+                    "graceful restart request rejected with HTTP status {code}"
+                ));
+                false
+            }
+            None => {
+                append_desktop_log(
+                    "graceful restart request returned no HTTP status; will verify restart by polling backend",
+                );
+                true
+            }
+        }
     }
 
     fn wait_for_graceful_restart(
@@ -645,15 +718,19 @@ Content-Length: {}\r\n\
         Ok(())
     }
 
-    fn restart_backend(&self, app: &AppHandle) -> Result<(), String> {
+    fn restart_backend(&self, app: &AppHandle, auth_token: Option<&str>) -> Result<(), String> {
         append_desktop_log("tray requested backend restart");
 
         let _restart_guard = AtomicFlagGuard::set(&self.is_restarting);
         let plan = self.resolve_launch_plan(app)?;
+        let restart_auth_token = self.resolve_restart_auth_token(auth_token);
         let previous_start_time = self.fetch_backend_start_time();
-        if self.request_graceful_restart() {
+        if self.request_graceful_restart(restart_auth_token.as_deref()) {
             match self.wait_for_graceful_restart(previous_start_time, plan.packaged_mode) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    append_desktop_log("graceful restart completed via backend api");
+                    return Ok(());
+                }
                 Err(error) => append_desktop_log(&format!(
                     "graceful restart did not complete, fallback to managed restart: {error}"
                 )),
@@ -701,11 +778,23 @@ fn desktop_bridge_get_backend_state(app_handle: AppHandle) -> BackendBridgeState
 }
 
 #[tauri::command]
+fn desktop_bridge_set_auth_token(
+    app_handle: AppHandle,
+    auth_token: Option<String>,
+) -> BackendBridgeResult {
+    let state = app_handle.state::<BackendState>();
+    state.set_restart_auth_token(auth_token.as_deref());
+    BackendBridgeResult {
+        ok: true,
+        reason: None,
+    }
+}
+
+#[tauri::command]
 fn desktop_bridge_restart_backend(
     app_handle: AppHandle,
     auth_token: Option<String>,
 ) -> BackendBridgeResult {
-    let _ = auth_token;
     let state = app_handle.state::<BackendState>();
     if state.is_spawning.load(Ordering::Relaxed) || state.is_restarting.load(Ordering::Relaxed) {
         return BackendBridgeResult {
@@ -714,7 +803,7 @@ fn desktop_bridge_restart_backend(
         };
     }
 
-    match state.restart_backend(&app_handle) {
+    match state.restart_backend(&app_handle, auth_token.as_deref()) {
         Ok(()) => BackendBridgeResult {
             ok: true,
             reason: None,
@@ -759,6 +848,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             desktop_bridge_is_electron_runtime,
             desktop_bridge_get_backend_state,
+            desktop_bridge_set_auth_token,
             desktop_bridge_restart_backend,
             desktop_bridge_stop_backend
         ])
@@ -962,10 +1052,14 @@ fn handle_tray_menu_event(app_handle: &AppHandle, menu_id: &str) {
         TRAY_MENU_TOGGLE_WINDOW => toggle_main_window(app_handle),
         TRAY_MENU_RELOAD_WINDOW => reload_main_window(app_handle),
         TRAY_MENU_RESTART_BACKEND => {
-            emit_tray_restart_backend_event(app_handle);
             show_main_window(app_handle);
+            if main_window_uses_backend_origin(app_handle) {
+                emit_tray_restart_backend_event(app_handle);
+                return;
+            }
+
             let state = app_handle.state::<BackendState>();
-            match state.restart_backend(app_handle) {
+            match state.restart_backend(app_handle, None) {
                 Ok(()) => {
                     append_desktop_log("backend restarted from tray menu");
                     reload_main_window(app_handle);
@@ -982,6 +1076,20 @@ fn handle_tray_menu_event(app_handle: &AppHandle, menu_id: &str) {
         }
         _ => {}
     }
+}
+
+fn main_window_uses_backend_origin(app_handle: &AppHandle) -> bool {
+    let Some(window) = app_handle.get_webview_window("main") else {
+        return false;
+    };
+    let Ok(window_url) = window.url() else {
+        return false;
+    };
+    let state = app_handle.state::<BackendState>();
+    let Ok(backend_url) = Url::parse(&state.backend_url) else {
+        return false;
+    };
+    same_origin(&backend_url, &window_url)
 }
 
 fn emit_tray_restart_backend_event(app_handle: &AppHandle) {
@@ -1192,17 +1300,74 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
     return () => window.removeEventListener('astrbot-desktop:tray-restart-backend', handler);
   };
 
+  const getStoredAuthToken = () => {
+    try {
+      const token = window.localStorage?.getItem('token');
+      return typeof token === 'string' && token ? token : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const syncAuthToken = (token = getStoredAuthToken()) =>
+    invokeBridge('desktop_bridge_set_auth_token', {
+      auth_token: typeof token === 'string' && token ? token : null
+    });
+
+  const patchLocalStorageTokenSync = () => {
+    try {
+      const storage = window.localStorage;
+      if (!storage || window.__astrbotDesktopTokenSyncPatched) return;
+      window.__astrbotDesktopTokenSyncPatched = true;
+
+      const rawSetItem = storage.setItem?.bind(storage);
+      const rawRemoveItem = storage.removeItem?.bind(storage);
+      const rawClear = storage.clear?.bind(storage);
+
+      if (typeof rawSetItem === 'function') {
+        storage.setItem = (key, value) => {
+          rawSetItem(key, value);
+          if (key === 'token') {
+            void syncAuthToken(value);
+          }
+        };
+      }
+      if (typeof rawRemoveItem === 'function') {
+        storage.removeItem = (key) => {
+          rawRemoveItem(key);
+          if (key === 'token') {
+            void syncAuthToken(null);
+          }
+        };
+      }
+      if (typeof rawClear === 'function') {
+        storage.clear = () => {
+          rawClear();
+          void syncAuthToken(null);
+        };
+      }
+    } catch {}
+  };
+
   window.astrbotDesktop = {
     __tauriBridge: true,
     isElectron: true,
     isElectronRuntime: () => Promise.resolve(true),
     getBackendState: () => invokeBridge('desktop_bridge_get_backend_state'),
-    restartBackend: (authToken = null) => invokeBridge('desktop_bridge_restart_backend', {
-      auth_token: typeof authToken === 'string' ? authToken : null
-    }),
+    restartBackend: async (authToken = null) => {
+      const normalizedToken =
+        typeof authToken === 'string' && authToken ? authToken : getStoredAuthToken();
+      await syncAuthToken(normalizedToken);
+      return invokeBridge('desktop_bridge_restart_backend', {
+        auth_token: normalizedToken
+      });
+    },
     stopBackend: () => invokeBridge('desktop_bridge_stop_backend'),
     onTrayRestartBackend,
   };
+
+  patchLocalStorageTokenSync();
+  void syncAuthToken();
 })();
 "#;
 
@@ -1324,11 +1489,7 @@ fn parse_http_json_response(raw: &[u8]) -> Option<serde_json::Value> {
     let (header_bytes, body_bytes) = raw.split_at(header_end + 4);
     let header_text = String::from_utf8_lossy(header_bytes);
 
-    let status_code = header_text
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())?;
+    let status_code = parse_http_status_code(raw)?;
     if !(200..300).contains(&status_code) {
         return None;
     }
@@ -1344,6 +1505,16 @@ fn parse_http_json_response(raw: &[u8]) -> Option<serde_json::Value> {
     };
 
     serde_json::from_slice(&payload).ok()
+}
+
+fn parse_http_status_code(raw: &[u8]) -> Option<u16> {
+    let header_end = raw.windows(4).position(|window| window == b"\r\n\r\n")?;
+    let header_text = String::from_utf8_lossy(&raw[..header_end + 4]);
+    header_text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
 }
 
 fn decode_chunked_body(mut input: &[u8]) -> Option<Vec<u8>> {
@@ -1484,10 +1655,9 @@ fn append_desktop_log(message: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs().to_string())
-        .unwrap_or_else(|_| "0".to_string());
+    let timestamp = chrono::Local::now()
+        .format("%Y-%m-%d %H:%M:%S%.3f %z")
+        .to_string();
     let line = format!("[{}] {}\n", timestamp, message);
     let _ = OpenOptions::new()
         .create(true)

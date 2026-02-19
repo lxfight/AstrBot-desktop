@@ -41,16 +41,16 @@ jobs:
         include:
           - os_name: linux
             arch: amd64
-            runner: ubuntu-22.04
+            runner: ubuntu-latest
           - os_name: linux
             arch: arm64
             runner: ubuntu-24.04-arm
           - os_name: macos
             arch: amd64
-            runner: macos-13
+            runner: macos-latest
           - os_name: macos
             arch: arm64
-            runner: macos-14
+            runner: macos-latest
           - os_name: windows
             arch: amd64
             runner: windows-2022
