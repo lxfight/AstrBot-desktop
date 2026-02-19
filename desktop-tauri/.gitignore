@@ -1,0 +1,14 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+vendor/
+runtime/
+resources/backend/*
+!resources/backend/.gitkeep
+resources/webui/*
+!resources/webui/.gitkeep
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*

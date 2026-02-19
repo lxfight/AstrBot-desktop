@@ -1,0 +1,24 @@
+.DS_Store
+.pnpm-store/
+
+# desktop-tauri dependencies/cache
+desktop-tauri/node_modules/
+desktop-tauri/vendor/
+desktop-tauri/runtime/
+
+# desktop-tauri generated resources
+desktop-tauri/resources/backend/*
+!desktop-tauri/resources/backend/.gitkeep
+desktop-tauri/resources/webui/*
+!desktop-tauri/resources/webui/.gitkeep
+
+# rust/tauri build outputs
+desktop-tauri/src-tauri/target/
+desktop-tauri/src-tauri/gen/
+
+# logs
+desktop-tauri/*.log
+desktop-tauri/npm-debug.log*
+desktop-tauri/pnpm-debug.log*
+desktop-tauri/yarn-debug.log*
+desktop-tauri/yarn-error.log*

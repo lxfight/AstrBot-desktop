@@ -1,0 +1,15 @@
+{
+  "name": "astrbot-desktop-tauri",
+  "version": "4.17.3",
+  "description": "AstrBot desktop shell powered by Tauri",
+  "private": true,
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "sync:version": "node scripts/prepare-resources.mjs version",
+    "prepare:webui": "node scripts/prepare-resources.mjs webui",
+    "prepare:backend": "node scripts/prepare-resources.mjs backend",
+    "prepare:resources": "pnpm run prepare:webui && pnpm run prepare:backend",
+    "dev": "cargo tauri dev",
+    "build": "pnpm run prepare:resources && cargo tauri build"
+  }
+}
