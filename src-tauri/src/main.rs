@@ -1580,11 +1580,44 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
       authToken: typeof token === 'string' && token ? token : null
     });
 
+  const sanitizeRuntimeBridgeDetail = (detail) => {
+    if (detail instanceof Error) {
+      return `${detail.name}: ${detail.message}`;
+    }
+
+    if (typeof detail === 'string') {
+      return detail;
+    }
+
+    if (typeof detail === 'number' || typeof detail === 'boolean') {
+      return String(detail);
+    }
+
+    if (detail && typeof detail === 'object') {
+      const hasReason = typeof detail.reason === 'string' && detail.reason;
+      const hasOk = typeof detail.ok === 'boolean';
+      if (hasReason || hasOk) {
+        const summary = [];
+        if (hasOk) {
+          summary.push(`ok=${detail.ok}`);
+        }
+        if (hasReason) {
+          summary.push(`reason=${detail.reason}`);
+        }
+        return summary.join(' ');
+      }
+      return `type=${Object.prototype.toString.call(detail)}`;
+    }
+
+    return String(detail);
+  };
+
   const logRuntimeBridgeFallback = (command, fallbackValue, detail) => {
     if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      const sanitizedDetail = sanitizeRuntimeBridgeDetail(detail);
       console.warn(
         `[astrbotDesktop] ${command} fallback to ${fallbackValue}`,
-        detail,
+        sanitizedDetail,
       );
     }
   };
