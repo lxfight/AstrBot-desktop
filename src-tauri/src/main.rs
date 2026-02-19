@@ -1,9 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Deserialize;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
     borrow::Cow,
     env,
+    ffi::OsString,
     fs::{self, OpenOptions},
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -11,7 +14,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex,
+        Arc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, Instant},
@@ -31,6 +34,13 @@ const GRACEFUL_RESTART_REQUEST_TIMEOUT_MS: u64 = 2_500;
 const GRACEFUL_RESTART_START_TIME_TIMEOUT_MS: u64 = 1_800;
 const GRACEFUL_RESTART_POLL_INTERVAL_MS: u64 = 350;
 const GRACEFUL_STOP_TIMEOUT_MS: u64 = 10_000;
+const DEFAULT_BACKEND_PING_TIMEOUT_MS: u64 = 800;
+const BACKEND_PING_TIMEOUT_ENV: &str = "ASTRBOT_BACKEND_PING_TIMEOUT_MS";
+const BRIDGE_BACKEND_PING_TIMEOUT_ENV: &str = "ASTRBOT_BRIDGE_BACKEND_PING_TIMEOUT_MS";
+const DESKTOP_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const BACKEND_LOG_MAX_BYTES: u64 = 20 * 1024 * 1024;
+const LOG_BACKUP_COUNT: usize = 5;
+const BACKEND_LOG_ROTATION_CHECK_INTERVAL: Duration = Duration::from_secs(20);
 const DESKTOP_LOG_FILE: &str = "desktop.log";
 const TRAY_ID: &str = "astrbot-tray";
 const TRAY_MENU_TOGGLE_WINDOW: &str = "tray_toggle_window";
@@ -38,6 +48,13 @@ const TRAY_MENU_RELOAD_WINDOW: &str = "tray_reload_window";
 const TRAY_MENU_RESTART_BACKEND: &str = "tray_restart_backend";
 const TRAY_MENU_QUIT: &str = "tray_quit";
 const DEFAULT_SHELL_LOCALE: &str = "zh-CN";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(target_os = "windows")]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+static BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
+static BRIDGE_BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
+static DESKTOP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 struct ShellTexts {
@@ -77,6 +94,7 @@ struct BackendState {
     child: Mutex<Option<Child>>,
     backend_url: String,
     restart_auth_token: Mutex<Option<String>>,
+    log_rotator_stop: Mutex<Option<Arc<AtomicBool>>>,
     is_quitting: AtomicBool,
     is_spawning: AtomicBool,
     is_restarting: AtomicBool,
@@ -123,6 +141,7 @@ impl Default for BackendState {
                     .unwrap_or_else(|_| DEFAULT_BACKEND_URL.to_string()),
             ),
             restart_auth_token: Mutex::new(None),
+            log_rotator_stop: Mutex::new(None),
             is_quitting: AtomicBool::new(false),
             is_spawning: AtomicBool::new(false),
             is_restarting: AtomicBool::new(false),
@@ -132,7 +151,7 @@ impl Default for BackendState {
 
 impl BackendState {
     fn ensure_backend_ready(&self, app: &AppHandle) -> Result<(), String> {
-        if self.ping_backend(800) {
+        if self.ping_backend(backend_ping_timeout_ms()) {
             append_desktop_log("backend already reachable, skip spawn");
             return Ok(());
         }
@@ -146,7 +165,7 @@ impl BackendState {
 
         let _spawn_guard = AtomicFlagGuard::set(&self.is_spawning);
         let plan = self.resolve_launch_plan(app)?;
-        self.start_backend_process(&plan)?;
+        self.start_backend_process(app, &plan)?;
         self.wait_for_backend(&plan)
     }
 
@@ -312,7 +331,7 @@ impl BackendState {
         })
     }
 
-    fn start_backend_process(&self, plan: &LaunchPlan) -> Result<(), String> {
+    fn start_backend_process(&self, app: &AppHandle, plan: &LaunchPlan) -> Result<(), String> {
         if self
             .child
             .lock()
@@ -358,6 +377,13 @@ impl BackendState {
                 "PYTHONIOENCODING",
                 env::var("PYTHONIOENCODING").unwrap_or_else(|_| "utf-8".to_string()),
             );
+        #[cfg(target_os = "windows")]
+        {
+            // Keep packaged backend fully backgrounded; keep console visible for local/dev debugging.
+            if plan.packaged_mode {
+                command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+            }
+        }
 
         if plan.packaged_mode {
             command.env("ASTRBOT_ELECTRON_CLIENT", "1");
@@ -376,7 +402,8 @@ impl BackendState {
             command.env("ASTRBOT_WEBUI_DIR", webui_dir);
         }
 
-        if let Some(log_path) = backend_log_path(plan.root_dir.as_deref()) {
+        let backend_log_path = backend_log_path(plan.root_dir.as_deref());
+        if let Some(log_path) = backend_log_path.as_ref() {
             if let Some(log_parent) = log_path.parent() {
                 fs::create_dir_all(log_parent).map_err(|error| {
                     format!(
@@ -386,10 +413,17 @@ impl BackendState {
                     )
                 })?;
             }
+            rotate_log_if_needed(
+                log_path,
+                BACKEND_LOG_MAX_BYTES,
+                LOG_BACKUP_COUNT,
+                "backend",
+                false,
+            );
             let stdout_file = OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(&log_path)
+                .open(log_path)
                 .map_err(|error| {
                     format!(
                         "Failed to open backend log {}: {}",
@@ -403,6 +437,7 @@ impl BackendState {
             command.stdout(Stdio::from(stdout_file));
             command.stderr(Stdio::from(stderr_file));
         } else {
+            self.stop_backend_log_rotation_worker();
             command.stdout(Stdio::null());
             command.stderr(Stdio::null());
         }
@@ -414,6 +449,7 @@ impl BackendState {
                 error
             )
         })?;
+        let child_pid = child.id();
         append_desktop_log(&format!(
             "spawned backend: cmd={:?}, cwd={}",
             build_debug_command(plan),
@@ -423,6 +459,11 @@ impl BackendState {
             .child
             .lock()
             .map_err(|_| "Backend process lock poisoned.")? = Some(child);
+        if let Some(log_path) = backend_log_path {
+            self.start_backend_log_rotation_worker(app, log_path, child_pid);
+        } else {
+            self.stop_backend_log_rotation_worker();
+        }
         Ok(())
     }
 
@@ -431,7 +472,7 @@ impl BackendState {
         let start_time = Instant::now();
 
         loop {
-            if self.ping_backend(800) {
+            if self.ping_backend(backend_ping_timeout_ms()) {
                 return Ok(());
             }
 
@@ -542,7 +583,7 @@ Content-Type: application/json\r\n\
 Content-Length: {}\r\n\
 \r\n\
 {}",
-            payload.as_bytes().len(),
+            payload.len(),
             payload
         );
         if stream.write_all(request.as_bytes()).is_err() {
@@ -713,6 +754,7 @@ Content-Length: {}\r\n\
     }
 
     fn stop_backend(&self) -> Result<(), String> {
+        self.stop_backend_log_rotation_worker();
         let mut guard = self
             .child
             .lock()
@@ -733,6 +775,102 @@ Content-Length: {}\r\n\
         ))
     }
 
+    fn stop_backend_log_rotation_worker(&self) {
+        match self.log_rotator_stop.lock() {
+            Ok(mut guard) => {
+                if let Some(flag) = guard.take() {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
+            Err(error) => {
+                append_desktop_log(&format!(
+                    "backend log rotator stop flag lock poisoned: {error}"
+                ));
+            }
+        }
+    }
+
+    fn child_matches_pid_and_alive(&self, child_pid: u32) -> bool {
+        let mut guard = match self.child.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                append_desktop_log(&format!(
+                    "backend child lock poisoned while checking log rotator worker pid={child_pid}: {error}"
+                ));
+                return false;
+            }
+        };
+
+        let Some(child) = guard.as_mut() else {
+            return false;
+        };
+        if child.id() != child_pid {
+            return false;
+        }
+
+        match child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                append_desktop_log(&format!(
+                    "backend process exited, stop log rotator worker: pid={child_pid}, status={status}"
+                ));
+                false
+            }
+            Err(error) => {
+                append_desktop_log(&format!(
+                    "failed to poll backend process status for log rotator worker pid={child_pid}: {error}"
+                ));
+                false
+            }
+        }
+    }
+
+    fn start_backend_log_rotation_worker(
+        &self,
+        app: &AppHandle,
+        log_path: PathBuf,
+        child_pid: u32,
+    ) {
+        self.stop_backend_log_rotation_worker();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        match self.log_rotator_stop.lock() {
+            Ok(mut guard) => {
+                *guard = Some(stop_flag.clone());
+            }
+            Err(error) => {
+                append_desktop_log(&format!(
+                    "backend log rotator stop flag lock poisoned on start: {error}"
+                ));
+                return;
+            }
+        }
+
+        let app_handle = app.clone();
+        thread::spawn(move || {
+            let log_scope = format!("backend(pid={child_pid})");
+            loop {
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                thread::sleep(BACKEND_LOG_ROTATION_CHECK_INTERVAL);
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                let state = app_handle.state::<BackendState>();
+                if !state.child_matches_pid_and_alive(child_pid) {
+                    break;
+                }
+                rotate_log_if_needed(
+                    &log_path,
+                    BACKEND_LOG_MAX_BYTES,
+                    LOG_BACKUP_COUNT,
+                    &log_scope,
+                    true,
+                );
+            }
+        });
+    }
+
     fn stop_backend_for_bridge(&self) -> Result<(), String> {
         let has_managed_child = self
             .child
@@ -743,7 +881,7 @@ Content-Length: {}\r\n\
             return self.stop_backend();
         }
 
-        if self.ping_backend(800) {
+        if self.ping_backend(backend_ping_timeout_ms()) {
             return Err("Backend is running but not managed by desktop process.".to_string());
         }
         Ok(())
@@ -778,14 +916,24 @@ Content-Length: {}\r\n\
 
         self.stop_backend()?;
         let _spawn_guard = AtomicFlagGuard::set(&self.is_spawning);
-        self.start_backend_process(&plan)?;
+        self.start_backend_process(app, &plan)?;
         self.wait_for_backend(&plan)
     }
 
     fn bridge_state(&self, app: &AppHandle) -> BackendBridgeState {
-        let can_manage = self.resolve_launch_plan(app).is_ok();
+        let has_managed_child = self
+            .child
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or_else(|error| {
+                append_desktop_log(&format!(
+                    "backend bridge: child process mutex poisoned in bridge_state: {error}"
+                ));
+                false
+            });
+        let can_manage = has_managed_child || self.resolve_launch_plan(app).is_ok();
         BackendBridgeState {
-            running: self.ping_backend(800),
+            running: self.ping_backend(bridge_backend_ping_timeout_ms()),
             spawning: self.is_spawning.load(Ordering::Relaxed),
             restarting: self.is_restarting.load(Ordering::Relaxed),
             can_manage,
@@ -910,14 +1058,14 @@ fn main() {
                     }
 
                     api.prevent_close();
-                    hide_main_window(&app_handle);
+                    hide_main_window(app_handle);
                 }
                 WindowEvent::Focused(false) => {
                     if let Ok(true) = window.is_minimized() {
                         let app_handle = window.app_handle();
                         let state = app_handle.state::<BackendState>();
                         if !state.is_quitting() {
-                            hide_main_window(&app_handle);
+                            hide_main_window(app_handle);
                         }
                     }
                 }
@@ -937,34 +1085,41 @@ fn main() {
         })
         .setup(|app| {
             let app_handle = app.handle().clone();
-            let state = app_handle.state::<BackendState>();
-            if let Err(error) = state.ensure_backend_ready(&app_handle) {
-                show_startup_error(&app_handle, &error);
-                return Ok(());
-            }
-
-            let Some(window) = app_handle.get_webview_window("main") else {
-                show_startup_error(
-                    &app_handle,
-                    "Main window is unavailable after backend startup.",
-                );
-                return Ok(());
-            };
-
-            let js = format!(
-                "window.location.replace({});",
-                serde_json::to_string(&state.backend_url).unwrap_or_else(|_| "\"/\"".to_string())
-            );
-            if let Err(error) = window.eval(&js) {
-                show_startup_error(
-                    &app_handle,
-                    &format!("Failed to navigate to backend dashboard: {error}"),
-                );
-            }
-
             if let Err(error) = setup_tray(&app_handle) {
                 append_desktop_log(&format!("failed to initialize tray: {error}"));
             }
+
+            let startup_app_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let startup_worker_handle = startup_app_handle.clone();
+                let startup_result = tauri::async_runtime::spawn_blocking(move || {
+                    let state = startup_worker_handle.state::<BackendState>();
+                    state.ensure_backend_ready(&startup_worker_handle)
+                })
+                .await
+                .map_err(|error| format!("Backend startup task failed: {error}"))
+                .and_then(|result| result);
+
+                match startup_result {
+                    Ok(()) => {
+                        if let Err(error) = run_on_main_thread_dispatch(
+                            &startup_app_handle,
+                            "navigate backend",
+                            move |main_app| match navigate_main_window_to_backend(main_app) {
+                                Ok(()) => {}
+                                Err(navigate_error) => {
+                                    show_startup_error(main_app, &navigate_error);
+                                }
+                            },
+                        ) {
+                            show_startup_error_on_main_thread(&startup_app_handle, &error);
+                        }
+                    }
+                    Err(error) => {
+                        show_startup_error_on_main_thread(&startup_app_handle, &error);
+                    }
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -1216,6 +1371,21 @@ fn reload_main_window(app_handle: &AppHandle) {
     if let Err(error) = window.reload() {
         append_desktop_log(&format!("failed to reload main window: {error}"));
     }
+}
+
+fn navigate_main_window_to_backend(app_handle: &AppHandle) -> Result<(), String> {
+    let state = app_handle.state::<BackendState>();
+    let backend_url =
+        serde_json::to_string(&state.backend_url).unwrap_or_else(|_| "\"/\"".to_string());
+
+    let Some(window) = app_handle.get_webview_window("main") else {
+        return Err("Main window is unavailable after backend startup.".to_string());
+    };
+
+    let js = format!("window.location.replace({backend_url});");
+    window
+        .eval(&js)
+        .map_err(|error| format!("Failed to navigate to backend dashboard: {error}"))
 }
 
 fn shell_texts_for_locale(locale: &str) -> ShellTexts {
@@ -1712,6 +1882,40 @@ fn resolve_resource_path(app: &AppHandle, relative_path: &str) -> Option<PathBuf
     None
 }
 
+fn parse_ping_timeout_env(raw: &str, env_name: &str, fallback_ms: u64) -> u64 {
+    match raw.trim().parse::<u64>() {
+        Ok(timeout_ms) if timeout_ms > 0 => timeout_ms,
+        _ => {
+            append_desktop_log(&format!(
+                "invalid {}='{}', fallback to {}ms",
+                env_name, raw, fallback_ms
+            ));
+            fallback_ms
+        }
+    }
+}
+
+fn backend_ping_timeout_ms() -> u64 {
+    *BACKEND_PING_TIMEOUT_MS.get_or_init(|| match env::var(BACKEND_PING_TIMEOUT_ENV) {
+        Ok(raw) => parse_ping_timeout_env(
+            &raw,
+            BACKEND_PING_TIMEOUT_ENV,
+            DEFAULT_BACKEND_PING_TIMEOUT_MS,
+        ),
+        Err(_) => DEFAULT_BACKEND_PING_TIMEOUT_MS,
+    })
+}
+
+fn bridge_backend_ping_timeout_ms() -> u64 {
+    *BRIDGE_BACKEND_PING_TIMEOUT_MS.get_or_init(|| {
+        let fallback = backend_ping_timeout_ms();
+        match env::var(BRIDGE_BACKEND_PING_TIMEOUT_ENV) {
+            Ok(raw) => parse_ping_timeout_env(&raw, BRIDGE_BACKEND_PING_TIMEOUT_ENV, fallback),
+            Err(_) => fallback,
+        }
+    })
+}
+
 fn desktop_log_path() -> PathBuf {
     if let Ok(custom) = env::var("ASTRBOT_DESKTOP_LOG_PATH") {
         let candidate = PathBuf::from(custom.trim());
@@ -1742,6 +1946,17 @@ fn append_desktop_log(message: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
+    let _guard = match DESKTOP_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(())).lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    rotate_log_if_needed(
+        &path,
+        DESKTOP_LOG_MAX_BYTES,
+        LOG_BACKUP_COUNT,
+        "desktop",
+        false,
+    );
     let timestamp = chrono::Local::now()
         .format("%Y-%m-%d %H:%M:%S%.3f %z")
         .to_string();
@@ -1753,8 +1968,149 @@ fn append_desktop_log(message: &str) {
         .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
 }
 
+fn rotate_log_if_needed(
+    path: &Path,
+    max_bytes: u64,
+    backup_count: usize,
+    log_scope: &str,
+    copy_and_truncate: bool,
+) {
+    if max_bytes == 0 || backup_count == 0 {
+        return;
+    }
+
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "[log rotation:{log_scope}] failed to read metadata for {}: {}",
+                    path.display(),
+                    error
+                );
+            }
+            return;
+        }
+    };
+    if metadata.len() < max_bytes {
+        return;
+    }
+
+    let oldest = rotated_log_path(path, backup_count);
+    if let Err(error) = fs::remove_file(&oldest) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "[log rotation:{log_scope}] failed to remove oldest backup {}: {}",
+                oldest.display(),
+                error
+            );
+        }
+    }
+
+    for index in (1..backup_count).rev() {
+        let source = rotated_log_path(path, index);
+        if !source.exists() {
+            continue;
+        }
+        let target = rotated_log_path(path, index + 1);
+        if let Err(error) = fs::remove_file(&target) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "[log rotation:{log_scope}] failed to remove backup {}: {}",
+                    target.display(),
+                    error
+                );
+            }
+        }
+        if let Err(error) = fs::rename(&source, &target) {
+            eprintln!(
+                "[log rotation:{log_scope}] failed to rename {} to {}: {}",
+                source.display(),
+                target.display(),
+                error
+            );
+        }
+    }
+
+    let rotated = rotated_log_path(path, 1);
+    if let Err(error) = fs::remove_file(&rotated) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "[log rotation:{log_scope}] failed to remove first backup {}: {}",
+                rotated.display(),
+                error
+            );
+        }
+    }
+
+    if copy_and_truncate {
+        match fs::copy(path, &rotated) {
+            Ok(_) => {
+                if let Err(error) = OpenOptions::new().write(true).truncate(true).open(path) {
+                    eprintln!(
+                        "[log rotation:{log_scope}] failed to truncate active log {}: {}",
+                        path.display(),
+                        error
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "[log rotation:{log_scope}] failed to copy {} to {}: {}",
+                    path.display(),
+                    rotated.display(),
+                    error
+                );
+            }
+        }
+    } else if let Err(error) = fs::rename(path, &rotated) {
+        eprintln!(
+            "[log rotation:{log_scope}] failed to rotate {} to {}: {}",
+            path.display(),
+            rotated.display(),
+            error
+        );
+    }
+}
+
+fn rotated_log_path(path: &Path, index: usize) -> PathBuf {
+    let mut value = OsString::from(path.as_os_str());
+    value.push(format!(".{index}"));
+    PathBuf::from(value)
+}
+
 fn show_startup_error(app_handle: &AppHandle, message: &str) {
     append_desktop_log(&format!("startup error: {}", message));
     eprintln!("AstrBot startup failed: {message}");
     app_handle.exit(1);
+}
+
+fn show_startup_error_on_main_thread(app_handle: &AppHandle, message: &str) {
+    let message_owned = message.to_string();
+    if let Err(error) =
+        run_on_main_thread_dispatch(app_handle, "show startup error", move |main_app| {
+            show_startup_error(main_app, &message_owned);
+        })
+    {
+        append_desktop_log(&format!(
+            "failed to dispatch startup error handling to main thread: {error}"
+        ));
+        show_startup_error(app_handle, message);
+    }
+}
+
+fn run_on_main_thread_dispatch<F>(
+    app_handle: &AppHandle,
+    action_name: &str,
+    action: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&AppHandle) + Send + 'static,
+{
+    let app_handle_for_main = app_handle.clone();
+    app_handle
+        .run_on_main_thread(move || {
+            action(&app_handle_for_main);
+        })
+        .map_err(|error| format!("failed to schedule '{action_name}' on main thread: {error}"))
 }

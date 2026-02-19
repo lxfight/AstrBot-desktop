@@ -1,0 +1,26 @@
+!macro NSIS_HOOK_PREUNINSTALL
+  ; Ensure packaged backend processes do not keep install files locked during uninstall.
+  StrCpy $0 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$0" +2 0
+    StrCpy $0 "powershell.exe"
+  StrCpy $1 "$INSTDIR\resources\kill-backend-processes.ps1"
+  IfFileExists "$1" +2 0
+    StrCpy $1 "$INSTDIR\_up_\resources\kill-backend-processes.ps1"
+  IfFileExists "$1" 0 +3
+    nsExec::ExecToLog '"$0" -NoProfile -ExecutionPolicy Bypass -File "$1" -InstallDir "$INSTDIR"'
+    Goto +2
+  DetailPrint "Skip backend process cleanup: script not found: $1"
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; Keep behavior aligned with NSIS checkbox: only remove user data when user asked for it.
+  ${If} $DeleteAppDataCheckboxState = 1
+  ${AndIf} $UpdateMode <> 1
+    ExpandEnvStrings $0 "%USERPROFILE%"
+    ${If} $0 != ""
+      RmDir /r "$0\.astrbot"
+    ${Else}
+      DetailPrint "Skip app data cleanup: USERPROFILE is empty."
+    ${EndIf}
+  ${EndIf}
+!macroend

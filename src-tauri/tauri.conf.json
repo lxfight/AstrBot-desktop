@@ -28,13 +28,27 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "windows": {
+      "wix": {
+        "language": "zh-CN"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "installerHooks": "windows/nsis-installer-hooks.nsh"
+      }
+    },
     "icon": [
       "icons/icon.ico",
       "icons/icon.png"
     ],
     "resources": {
       "../resources/backend": "backend",
-      "../resources/webui": "webui"
+      "../resources/webui": "webui",
+      "windows/kill-backend-processes.ps1": "kill-backend-processes.ps1"
     }
   }
 }
