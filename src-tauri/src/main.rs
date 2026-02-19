@@ -1571,6 +1571,11 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
       authToken: typeof token === 'string' && token ? token : null
     });
 
+  const isRuntimeBridgeEnabled = async (command, fallbackValue) => {
+    const result = await invokeBridge(command);
+    return typeof result === 'boolean' ? result : fallbackValue;
+  };
+
   const patchLocalStorageTokenSync = () => {
     try {
       const storage = window.localStorage;
@@ -1609,10 +1614,12 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
   window.astrbotDesktop = {
     __tauriBridge: true,
     isDesktop: true,
-    isDesktopRuntime: () => Promise.resolve(true),
+    isDesktopRuntime: () =>
+      isRuntimeBridgeEnabled('desktop_bridge_is_desktop_runtime', true),
     // Legacy aliases for current dashboard compatibility.
     isElectron: true,
-    isElectronRuntime: () => Promise.resolve(true),
+    isElectronRuntime: () =>
+      isRuntimeBridgeEnabled('desktop_bridge_is_electron_runtime', true),
     getBackendState: () => invokeBridge('desktop_bridge_get_backend_state'),
     restartBackend: async (authToken = null) => {
       const normalizedToken =
