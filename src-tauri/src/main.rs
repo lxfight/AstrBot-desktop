@@ -1520,6 +1520,15 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
   const invoke = window.__TAURI_INTERNALS__?.invoke;
   if (typeof invoke !== 'function') return;
 
+  const BRIDGE_COMMANDS = Object.freeze({
+    IS_DESKTOP_RUNTIME: 'desktop_bridge_is_desktop_runtime',
+    IS_ELECTRON_RUNTIME: 'desktop_bridge_is_electron_runtime',
+    GET_BACKEND_STATE: 'desktop_bridge_get_backend_state',
+    SET_AUTH_TOKEN: 'desktop_bridge_set_auth_token',
+    RESTART_BACKEND: 'desktop_bridge_restart_backend',
+    STOP_BACKEND: 'desktop_bridge_stop_backend',
+  });
+
   const invokeBridge = async (command, payload = {}) => {
     try {
       return await invoke(command, payload);
@@ -1567,7 +1576,7 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
   };
 
   const syncAuthToken = (token = getStoredAuthToken()) =>
-    invokeBridge('desktop_bridge_set_auth_token', {
+    invokeBridge(BRIDGE_COMMANDS.SET_AUTH_TOKEN, {
       authToken: typeof token === 'string' && token ? token : null
     });
 
@@ -1580,9 +1589,21 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
     }
   };
 
+  const getStrictBooleanFallback = (command, fallbackValue) => {
+    if (typeof fallbackValue === 'boolean') {
+      return fallbackValue;
+    }
+
+    logRuntimeBridgeFallback(
+      command,
+      false,
+      `invalid fallback type (${typeof fallbackValue}), force false`,
+    );
+    return false;
+  };
+
   const isRuntimeBridgeEnabled = async (command, fallbackValue) => {
-    const normalizedFallback =
-      typeof fallbackValue === 'boolean' ? fallbackValue : Boolean(fallbackValue);
+    const normalizedFallback = getStrictBooleanFallback(command, fallbackValue);
 
     try {
       const result = await invokeBridge(command);
@@ -1640,21 +1661,21 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
     __tauriBridge: true,
     isDesktop: true,
     isDesktopRuntime: () =>
-      isRuntimeBridgeEnabled('desktop_bridge_is_desktop_runtime', true),
+      isRuntimeBridgeEnabled(BRIDGE_COMMANDS.IS_DESKTOP_RUNTIME, true),
     // Legacy aliases for current dashboard compatibility.
     isElectron: true,
     isElectronRuntime: () =>
-      isRuntimeBridgeEnabled('desktop_bridge_is_electron_runtime', true),
-    getBackendState: () => invokeBridge('desktop_bridge_get_backend_state'),
+      isRuntimeBridgeEnabled(BRIDGE_COMMANDS.IS_ELECTRON_RUNTIME, true),
+    getBackendState: () => invokeBridge(BRIDGE_COMMANDS.GET_BACKEND_STATE),
     restartBackend: async (authToken = null) => {
       const normalizedToken =
         typeof authToken === 'string' && authToken ? authToken : getStoredAuthToken();
       await syncAuthToken(normalizedToken);
-      return invokeBridge('desktop_bridge_restart_backend', {
+      return invokeBridge(BRIDGE_COMMANDS.RESTART_BACKEND, {
         authToken: normalizedToken
       });
     },
-    stopBackend: () => invokeBridge('desktop_bridge_stop_backend'),
+    stopBackend: () => invokeBridge(BRIDGE_COMMANDS.STOP_BACKEND),
     onTrayRestartBackend,
   };
 
