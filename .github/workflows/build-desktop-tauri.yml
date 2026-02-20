@@ -200,16 +200,16 @@ jobs:
           ASTRBOT_DESKTOP_CRYPTOGRAPHY_FALLBACK_VERSIONS: ${{ vars.ASTRBOT_DESKTOP_CRYPTOGRAPHY_FALLBACK_VERSIONS || '' }}
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
-        run: pnpm run build -- --target ${{ matrix.target }}
+        run: cargo tauri build --target ${{ matrix.target }}
 
       - name: Verify macOS DMG integrity
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-          dmg_files=(src-tauri/target/release/bundle/dmg/*.dmg)
+          dmg_files=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
           if [ "${#dmg_files[@]}" -eq 0 ]; then
-            echo "No DMG files found under src-tauri/target/release/bundle/dmg"
+            echo "No DMG files found under src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
             exit 1
           fi
 
@@ -224,8 +224,8 @@ jobs:
           name: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-macos-${{ matrix.arch }}
           if-no-files-found: error
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/**/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
 
   build-windows:
     needs: resolve_build_context
