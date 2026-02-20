@@ -184,6 +184,19 @@ export ASTRBOT_SOURCE_DIR=/path/to/AstrBot
 make build ASTRBOT_BUILD_SOURCE_DIR=/path/to/AstrBot
 ```
 
+如需快速清理这些构建相关环境变量，可运行：
+
+```bash
+make clean-env
+source .astrbot-reset-env.sh
+```
+
+如果重置脚本已存在，需要显式允许覆盖：
+
+```bash
+make clean-env ASTRBOT_RESET_ENV_OVERWRITE=1
+```
+
 临时测试仓库示例：
 
 ```bash

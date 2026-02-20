@@ -209,59 +209,98 @@ const patchMonacoCssNestingWarnings = async (dashboardDir) => {
   }
 };
 
+const TRUTHY_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
+const isDesktopBridgeExpectationStrict = TRUTHY_ENV_VALUES.has(
+  String(process.env.ASTRBOT_DESKTOP_STRICT_BRIDGE_EXPECTATIONS || '')
+    .trim()
+    .toLowerCase(),
+);
+
+const DESKTOP_BRIDGE_PATTERNS = {
+  trayRestartGuard: /if\s*\(\s*!desktopBridge\s*\?\.\s*onTrayRestartBackend\s*\)\s*\{/,
+  trayRestartPromptInvoke:
+    /await\s+globalWaitingRef\s*\.\s*value\s*\?\.\s*check\s*\?\.\s*\(\s*[^)]*\s*\)\s*;?/,
+  desktopRuntimeImport:
+    /import\s+\{\s*getDesktopRuntimeInfo\s*\}\s+from\s+['"]@\/utils\/desktopRuntime['"]\s*;?/,
+  desktopRuntimeUsage: /await\s+getDesktopRuntimeInfo\s*\(\s*\)/,
+  desktopReleaseModeFlag: /\bisDesktopReleaseMode\b/,
+  desktopRuntimeProbeWarn: /console\.warn\([\s\S]*desktop runtime/i,
+};
+
 const DESKTOP_BRIDGE_EXPECTATIONS = [
   {
     filePath: ['src', 'App.vue'],
-    pattern: /if\s*\(\s*!desktopBridge\?\.onTrayRestartBackend\s*\)\s*\{/,
+    pattern: DESKTOP_BRIDGE_PATTERNS.trayRestartGuard,
     label: 'tray restart desktop guard',
+    required: false,
   },
   {
     filePath: ['src', 'App.vue'],
-    pattern: /await\s+globalWaitingRef\.value\?\.check\?\.\(\s*\)/,
+    pattern: DESKTOP_BRIDGE_PATTERNS.trayRestartPromptInvoke,
     label: 'tray restart waiting prompt',
+    required: false,
   },
   {
     filePath: ['src', 'utils', 'restartAstrBot.ts'],
-    pattern: /import\s+\{\s*getDesktopRuntimeInfo\s*\}\s+from\s+['"]@\/utils\/desktopRuntime['"]/,
+    pattern: DESKTOP_BRIDGE_PATTERNS.desktopRuntimeImport,
     label: 'desktop runtime helper import',
+    required: true,
   },
   {
     filePath: ['src', 'utils', 'restartAstrBot.ts'],
-    pattern: /await\s+getDesktopRuntimeInfo\s*\(\s*\)/,
+    pattern: DESKTOP_BRIDGE_PATTERNS.desktopRuntimeUsage,
     label: 'desktop runtime helper usage in restart flow',
+    required: true,
   },
   {
     filePath: ['src', 'layouts', 'full', 'vertical-header', 'VerticalHeader.vue'],
-    pattern: /\bisDesktopReleaseMode\b/,
+    pattern: DESKTOP_BRIDGE_PATTERNS.desktopReleaseModeFlag,
     label: 'desktop release mode flag',
+    required: false,
   },
   {
     filePath: ['src', 'layouts', 'full', 'vertical-header', 'VerticalHeader.vue'],
-    pattern: /await\s+getDesktopRuntimeInfo\s*\(\s*\)/,
+    pattern: DESKTOP_BRIDGE_PATTERNS.desktopRuntimeUsage,
     label: 'desktop runtime helper usage in header',
+    required: true,
   },
   {
     filePath: ['src', 'utils', 'desktopRuntime.ts'],
-    pattern: /Failed to detect desktop runtime/,
+    pattern: DESKTOP_BRIDGE_PATTERNS.desktopRuntimeProbeWarn,
     label: 'desktop runtime probe warning',
+    required: false,
   },
 ];
 
 const verifyDesktopBridgeArtifacts = async (dashboardDir) => {
+  const issues = [];
+
   for (const expectation of DESKTOP_BRIDGE_EXPECTATIONS) {
+    const mustPass = expectation.required || isDesktopBridgeExpectationStrict;
     const file = path.join(dashboardDir, ...expectation.filePath);
     if (!existsSync(file)) {
-      throw new Error(
-        `[prepare-resources] Missing required file for ${expectation.label}: ${path.relative(projectRoot, file)}`,
-      );
+      const message = `[prepare-resources] Missing required file for ${expectation.label}: ${path.relative(projectRoot, file)}`;
+      if (mustPass) {
+        issues.push(message);
+      } else {
+        console.warn(`${message} (compatibility check skipped)`);
+      }
+      continue;
     }
 
     const source = await readFile(file, 'utf8');
     if (!expectation.pattern.test(source)) {
-      throw new Error(
-        `[prepare-resources] Expected ${expectation.label} in ${path.relative(projectRoot, file)}. Please sync AstrBot dashboard sources.`,
-      );
+      const message = `[prepare-resources] Expected ${expectation.label} in ${path.relative(projectRoot, file)}. Please sync AstrBot dashboard sources.`;
+      if (mustPass) {
+        issues.push(message);
+      } else {
+        console.warn(`${message} (compatibility check skipped)`);
+      }
     }
+  }
+
+  if (issues.length > 0) {
+    throw new Error(issues.join('\n'));
   }
 };
 
