@@ -304,23 +304,49 @@ impl BackendState {
                     .clone()
                     .unwrap_or_else(|| backend_dir.to_path_buf())
             });
-        let webui_dir = env::var("ASTRBOT_WEBUI_DIR")
+        let embedded_webui_dir = env::var("ASTRBOT_WEBUI_DIR")
             .ok()
             .map(PathBuf::from)
             .or_else(|| {
                 resolve_resource_path(app, "webui/index.html")
                     .and_then(|index_path| index_path.parent().map(Path::to_path_buf))
-            })
-            .ok_or_else(|| {
-                "Packaged WebUI directory is missing. Expected embedded resource: webui/index.html"
-                    .to_string()
-            })?;
-        if !webui_dir.join("index.html").is_file() {
-            return Err(format!(
-                "Packaged WebUI index is missing: {}",
-                webui_dir.join("index.html").display()
-            ));
-        }
+            });
+        let fallback_webui_dir = packaged_fallback_webui_dir(root_dir.as_deref());
+        let webui_dir = match embedded_webui_dir {
+            Some(candidate) if candidate.join("index.html").is_file() => candidate,
+            Some(candidate) => {
+                append_desktop_log(&format!(
+                    "packaged webui index is missing at {}, trying fallback data/dist",
+                    candidate.join("index.html").display()
+                ));
+                if let Some(fallback) = fallback_webui_dir {
+                    append_desktop_log(&format!(
+                        "using fallback webui directory: {}",
+                        fallback.display()
+                    ));
+                    fallback
+                } else {
+                    return Err(format!(
+                        "Packaged WebUI is unavailable. Missing embedded index at {} and fallback data/dist. Please reinstall AstrBot or download the matching dist.zip to data/dist.",
+                        candidate.join("index.html").display()
+                    ));
+                }
+            }
+            None => {
+                if let Some(fallback) = fallback_webui_dir {
+                    append_desktop_log(&format!(
+                        "embedded webui directory not found, using fallback webui directory: {}",
+                        fallback.display()
+                    ));
+                    fallback
+                } else {
+                    return Err(
+                        "Packaged WebUI directory is missing and fallback data/dist is unavailable. Please reinstall AstrBot or download the matching dist.zip to data/dist."
+                            .to_string(),
+                    );
+                }
+            }
+        };
 
         let mut args = vec![launch_script_path.to_string_lossy().to_string()];
         args.push("--webui-dir".to_string());
@@ -1639,6 +1665,14 @@ fn update_tray_menu_labels(app_handle: &AppHandle) {
 
 const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"
 (() => {
+  if (
+    window.astrbotDesktop &&
+    window.astrbotDesktop.__tauriBridge === true &&
+    typeof window.astrbotDesktop.onTrayRestartBackend === 'function'
+  ) {
+    return;
+  }
+
   const invoke = window.__TAURI_INTERNALS__?.invoke;
   if (typeof invoke !== 'function') return;
 
@@ -2175,6 +2209,17 @@ fn detect_astrbot_source_root() -> Option<PathBuf> {
 
 fn default_packaged_root_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".astrbot"))
+}
+
+fn packaged_fallback_webui_dir(root_dir: Option<&Path>) -> Option<PathBuf> {
+    let root = root_dir
+        .map(Path::to_path_buf)
+        .or_else(default_packaged_root_dir)?;
+    let candidate = root.join("data").join("dist");
+    if candidate.join("index.html").is_file() {
+        return Some(candidate);
+    }
+    None
 }
 
 fn resolve_backend_timeout_ms(packaged_mode: bool) -> Option<Duration> {
