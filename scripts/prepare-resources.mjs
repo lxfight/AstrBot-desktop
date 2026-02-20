@@ -212,6 +212,8 @@ const patchMonacoCssNestingWarnings = async (dashboardDir) => {
 const LEGACY_DESKTOP_BRIDGE_PATTERNS = {
   trayRestartGuard:
     /if\s*\(\s*!desktopBridge\?\.isElectron\s*\|\|\s*!desktopBridge\.onTrayRestartBackend\s*\)\s*\{/,
+  trayRestartHandlerInvoke: /await\s+restartAstrBot\s*\(\s*globalWaitingRef\.value\s*\)/,
+  restartAstrBotImport: /^\s*import\s+\{\s*restartAstrBot\s*\}\s+from\s+['"]@\/utils\/restartAstrBot['"]\s*;?\r?\n/m,
   typeIsElectron: /^(\s+)isElectron:\s*boolean;(\r?\n)/m,
   typeIsElectronRuntime: /^(\s+)isElectronRuntime:\s*\(\)\s*=>\s*Promise<boolean>;(\r?\n)/m,
   electronAppFlagToken: /\bisElectronApp\b/,
@@ -226,6 +228,7 @@ const LEGACY_DESKTOP_BRIDGE_PATTERNS = {
 
 const MODERN_DESKTOP_BRIDGE_PATTERNS = {
   trayRestartGuard: /if\s*\(\s*!desktopBridge\?\.onTrayRestartBackend\s*\)\s*\{/,
+  trayRestartPromptInvoke: /await\s+globalWaitingRef\.value\?\.check\?\.\(\s*\)/,
   desktopBridgeTypeIsDesktop: /^\s+isDesktop:\s*boolean;\r?\n/m,
   desktopBridgeTypeRuntime: /^\s+isDesktopRuntime:\s*\(\)\s*=>\s*Promise<boolean>;\r?\n/m,
   restartCapabilityGuard: /const hasDesktopRestartCapability\s*=/,
@@ -268,8 +271,10 @@ const patchRequiredLegacyFile = async ({ filePath, transform, patchLabel, isAlre
 };
 
 const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
-  const hasModernTrayRestartGuard = (source) =>
-    MODERN_DESKTOP_BRIDGE_PATTERNS.trayRestartGuard.test(source);
+  const hasModernTrayRestartHook = (source) =>
+    MODERN_DESKTOP_BRIDGE_PATTERNS.trayRestartGuard.test(source) &&
+    MODERN_DESKTOP_BRIDGE_PATTERNS.trayRestartPromptInvoke.test(source) &&
+    !LEGACY_DESKTOP_BRIDGE_PATTERNS.restartAstrBotImport.test(source);
   const hasModernDesktopBridgeTypes = (source) =>
     MODERN_DESKTOP_BRIDGE_PATTERNS.desktopBridgeTypeIsDesktop.test(source) &&
     MODERN_DESKTOP_BRIDGE_PATTERNS.desktopBridgeTypeRuntime.test(source);
@@ -282,13 +287,20 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
 
   await patchRequiredLegacyFile({
     filePath: path.join(dashboardDir, 'src', 'App.vue'),
-    transform: (source) =>
-      source.replace(
+    transform: (source) => {
+      let patched = source.replace(
         LEGACY_DESKTOP_BRIDGE_PATTERNS.trayRestartGuard,
         'if (!desktopBridge?.onTrayRestartBackend) {',
-      ),
+      );
+      patched = patched.replace(
+        LEGACY_DESKTOP_BRIDGE_PATTERNS.trayRestartHandlerInvoke,
+        'await globalWaitingRef.value?.check?.()',
+      );
+      patched = patched.replace(LEGACY_DESKTOP_BRIDGE_PATTERNS.restartAstrBotImport, '');
+      return patched;
+    },
     patchLabel: 'tray restart desktop guard',
-    isAlreadyModern: hasModernTrayRestartGuard,
+    isAlreadyModern: hasModernTrayRestartHook,
   });
 
   await patchRequiredLegacyFile({

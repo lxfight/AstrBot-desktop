@@ -1393,6 +1393,7 @@ fn handle_tray_menu_event(app_handle: &AppHandle, menu_id: &str) {
         TRAY_MENU_RESTART_BACKEND => {
             append_desktop_log("tray requested backend restart");
             show_main_window(app_handle);
+            emit_tray_restart_backend_event(app_handle);
 
             let app_handle_cloned = app_handle.clone();
             thread::spawn(move || match do_restart_backend(&app_handle_cloned, None) {
@@ -1411,6 +1412,19 @@ fn handle_tray_menu_event(app_handle: &AppHandle, menu_id: &str) {
             app_handle.exit(0);
         }
         _ => {}
+    }
+}
+
+fn emit_tray_restart_backend_event(app_handle: &AppHandle) {
+    let Some(window) = app_handle.get_webview_window("main") else {
+        append_desktop_log("tray restart event skipped: main window not found");
+        return;
+    };
+
+    if let Err(error) = window.eval(
+        "if (typeof window !== 'undefined' && typeof window.__astrbotDesktopEmitTrayRestart === 'function') { window.__astrbotDesktopEmitTrayRestart(); }",
+    ) {
+        append_desktop_log(&format!("failed to emit tray restart event: {error}"));
     }
 }
 
