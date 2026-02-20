@@ -209,28 +209,68 @@ const patchMonacoCssNestingWarnings = async (dashboardDir) => {
   }
 };
 
-const patchTrayRestartBridgeGuard = async (dashboardDir) => {
-  const appVuePath = path.join(dashboardDir, 'src', 'App.vue');
-  if (!existsSync(appVuePath)) {
-    return;
-  }
+const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
+  const legacyDesktopFlag = `is${'Electron'}`;
+  const legacyDesktopRuntimeFn = `${legacyDesktopFlag}Runtime`;
+  const legacyDesktopModeVar = `${legacyDesktopFlag}App`;
 
-  const source = await readFile(appVuePath, 'utf8');
-  const legacyGuard = 'if (!desktopBridge?.isElectron || !desktopBridge.onTrayRestartBackend) {';
-  if (!source.includes(legacyGuard)) {
-    return;
-  }
+  const patchFile = async (filePath, transform, patchLabel) => {
+    if (!existsSync(filePath)) {
+      return;
+    }
+    const source = await readFile(filePath, 'utf8');
+    const patched = transform(source);
+    if (patched !== source) {
+      await writeFile(filePath, patched, 'utf8');
+      console.log(
+        `[prepare-resources] Patched ${patchLabel} in ${path.relative(projectRoot, filePath)}`,
+      );
+    }
+  };
 
-  const patched = source.replace(
-    legacyGuard,
-    'if (!desktopBridge?.onTrayRestartBackend) {',
+  await patchFile(
+    path.join(dashboardDir, 'src', 'App.vue'),
+    (source) =>
+      source.replace(
+        `if (!desktopBridge?.${legacyDesktopFlag} || !desktopBridge.onTrayRestartBackend) {`,
+        'if (!desktopBridge?.onTrayRestartBackend) {',
+      ),
+    'tray restart desktop guard',
   );
-  if (patched !== source) {
-    await writeFile(appVuePath, patched, 'utf8');
-    console.log(
-      '[prepare-resources] Patched dashboard tray restart bridge guard to support Tauri runtime.',
-    );
-  }
+
+  await patchFile(
+    path.join(dashboardDir, 'src', 'types', 'electron-bridge.d.ts'),
+    (source) => {
+      let patched = source;
+      patched = patched.replace(
+        `      ${legacyDesktopFlag}: boolean;\n`,
+        '      isDesktop: boolean;\n',
+      );
+      patched = patched.replace(
+        `      ${legacyDesktopRuntimeFn}: () => Promise<boolean>;\n`,
+        '      isDesktopRuntime: () => Promise<boolean>;\n',
+      );
+      return patched;
+    },
+    'desktop bridge type definitions',
+  );
+
+  await patchFile(
+    path.join(dashboardDir, 'src', 'layouts', 'full', 'vertical-header', 'VerticalHeader.vue'),
+    (source) => {
+      let patched = source.replaceAll(legacyDesktopModeVar, 'isDesktopReleaseMode');
+      patched = patched.replace(
+        `typeof window !== 'undefined' && !!window.astrbotDesktop?.${legacyDesktopFlag}`,
+        'false',
+      );
+      patched = patched.replace(
+        `isDesktopReleaseMode.value = !!window.astrbotDesktop?.${legacyDesktopFlag} ||\n      !!(await window.astrbotDesktop?.${legacyDesktopRuntimeFn}?.());`,
+        'isDesktopReleaseMode.value = false;',
+      );
+      return patched;
+    },
+    'desktop update mode guards',
+  );
 };
 
 const readAstrbotVersionFromPyproject = async (sourceDir) => {
@@ -410,7 +450,7 @@ const prepareWebui = async (sourceDir) => {
   const dashboardDir = path.join(sourceDir, 'dashboard');
   ensurePackageInstall(dashboardDir, 'AstrBot dashboard');
   await patchMonacoCssNestingWarnings(dashboardDir);
-  await patchTrayRestartBridgeGuard(dashboardDir);
+  await patchLegacyDesktopBridgeArtifacts(dashboardDir);
   runPnpmChecked(['--dir', dashboardDir, 'build'], sourceDir);
 
   const sourceWebuiDir = path.join(sourceDir, 'dashboard', 'dist');
