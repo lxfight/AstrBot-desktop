@@ -9,6 +9,7 @@ ASTRBOT_LOCAL_DIR ?= $(VENDOR_DIR)/AstrBot-local
 ASTRBOT_LOCAL_DESKTOP_DIR ?= $(ASTRBOT_LOCAL_DIR)/desktop
 ASTRBOT_SOURCE_GIT_URL ?= https://github.com/AstrBotDevs/AstrBot.git
 ASTRBOT_SOURCE_GIT_REF ?= master
+ASTRBOT_BUILD_SOURCE_DIR ?=
 RUST_MANIFEST ?= src-tauri/Cargo.toml
 NODE_MODULES_DIR ?= node_modules
 PNPM_STORE_DIR ?= .pnpm-store
@@ -30,6 +31,7 @@ help:
 	@echo "  make prepare-resources  Prepare all resources"
 	@echo "  make dev                Run Tauri dev"
 	@echo "  make build              Run Tauri build"
+	@echo "                          (set ASTRBOT_BUILD_SOURCE_DIR=... to force local source)"
 	@echo "  make rebuild            Clean and build"
 	@echo "  make lint               Run formatting and clippy checks"
 	@echo "  make test               Run Rust tests"
@@ -75,11 +77,17 @@ dev:
 build:
 	@set -e; \
 	build_version="$(ASTRBOT_DESKTOP_VERSION)"; \
+	build_source_dir="$(ASTRBOT_BUILD_SOURCE_DIR)"; \
 	if [ -z "$$build_version" ]; then \
 		build_version="$$(node -e "console.log(require('./package.json').version)")"; \
 	fi; \
+	if [ -n "$$build_source_dir" ]; then \
+		echo "Using explicit build source dir: $$build_source_dir"; \
+	fi; \
+	echo "Build resource source dir: $${build_source_dir:-<auto vendor from git ref>}"; \
 	ASTRBOT_SOURCE_GIT_URL="$(ASTRBOT_SOURCE_GIT_URL)" \
 	ASTRBOT_SOURCE_GIT_REF="$(ASTRBOT_SOURCE_GIT_REF)" \
+	ASTRBOT_SOURCE_DIR="$$build_source_dir" \
 	ASTRBOT_DESKTOP_VERSION="$$build_version" \
 	pnpm run build
 

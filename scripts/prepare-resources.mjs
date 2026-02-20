@@ -218,11 +218,10 @@ const LEGACY_DESKTOP_BRIDGE_PATTERNS = {
   typeIsElectronRuntime: /^(\s+)isElectronRuntime:\s*\(\)\s*=>\s*Promise<boolean>;(\r?\n)/m,
   electronAppFlagToken: /\bisElectronApp\b/,
   electronAppFlagReplace: /\bisElectronApp\b/g,
-  desktopReleaseEnvGuard:
-    /typeof\s+window\s*!==\s*'undefined'\s*&&\s*!!window\.astrbotDesktop\?\.isElectron/,
-  desktopReleaseRuntimeGuard:
-    /isDesktopReleaseMode\.value\s*=\s*!!window\.astrbotDesktop\?\.isElectron\s*\|\|\s*\r?\n\s*!!\(\s*await\s+window\.astrbotDesktop\?\.isElectronRuntime\?\.\(\)\s*\)\s*;/,
-  legacyRuntimeUsage: /window\.astrbotDesktop\?\.isElectronRuntime\?\.\(\)/,
+  desktopBridgeIsElectronToken: /window\.astrbotDesktop\?\.isElectron\b/,
+  desktopBridgeIsElectronReplace: /window\.astrbotDesktop\?\.isElectron\b/g,
+  legacyRuntimeUsageToken: /window\.astrbotDesktop\?\.isElectronRuntime\?\.\(\)/,
+  legacyRuntimeUsageReplace: /window\.astrbotDesktop\?\.isElectronRuntime\?\.\(\)/g,
   restartGuard: /if\s*\(\s*desktopBridge\?\.isElectron\s*\)\s*\{/,
 };
 
@@ -280,8 +279,8 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
     MODERN_DESKTOP_BRIDGE_PATTERNS.desktopBridgeTypeRuntime.test(source);
   const hasLegacyDesktopReleaseGuards = (source) =>
     LEGACY_DESKTOP_BRIDGE_PATTERNS.electronAppFlagToken.test(source) ||
-    LEGACY_DESKTOP_BRIDGE_PATTERNS.desktopReleaseEnvGuard.test(source) ||
-    LEGACY_DESKTOP_BRIDGE_PATTERNS.legacyRuntimeUsage.test(source);
+    LEGACY_DESKTOP_BRIDGE_PATTERNS.desktopBridgeIsElectronToken.test(source) ||
+    LEGACY_DESKTOP_BRIDGE_PATTERNS.legacyRuntimeUsageToken.test(source);
   const hasModernRestartCapabilityGuard = (source) =>
     MODERN_DESKTOP_BRIDGE_PATTERNS.restartCapabilityGuard.test(source);
 
@@ -328,13 +327,13 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
         LEGACY_DESKTOP_BRIDGE_PATTERNS.electronAppFlagReplace,
         'isDesktopReleaseMode',
       );
-      patched = patched.replace(
-        LEGACY_DESKTOP_BRIDGE_PATTERNS.desktopReleaseEnvGuard,
-        'false',
+      patched = patched.replaceAll(
+        LEGACY_DESKTOP_BRIDGE_PATTERNS.desktopBridgeIsElectronReplace,
+        'window.astrbotDesktop?.isDesktop',
       );
-      patched = patched.replace(
-        LEGACY_DESKTOP_BRIDGE_PATTERNS.desktopReleaseRuntimeGuard,
-        'isDesktopReleaseMode.value = false;',
+      patched = patched.replaceAll(
+        LEGACY_DESKTOP_BRIDGE_PATTERNS.legacyRuntimeUsageReplace,
+        'window.astrbotDesktop?.isDesktopRuntime?.()',
       );
       return patched;
     },

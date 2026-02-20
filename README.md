@@ -140,7 +140,7 @@ make prune
 
 推荐日常使用 `make update`，避免本地切换分支导致版本漂移。
 
-补充：`make build` 会默认使用当前 `package.json` 中的版本作为 `ASTRBOT_DESKTOP_VERSION`，避免构建前资源准备阶段把版本回写到其他值。若需覆盖，可显式传入 `ASTRBOT_DESKTOP_VERSION=...`。
+补充：`make build` 会默认使用当前 `package.json` 中的版本作为 `ASTRBOT_DESKTOP_VERSION`，并默认忽略全局 `ASTRBOT_SOURCE_DIR`（避免本地环境变量导致版本漂移）。若需覆盖，可显式传入 `ASTRBOT_DESKTOP_VERSION=...`；若需强制使用本地源码构建，可传入 `ASTRBOT_BUILD_SOURCE_DIR=/path/to/AstrBot`。
 
 示例：
 
@@ -168,10 +168,16 @@ export ASTRBOT_SOURCE_GIT_URL=https://github.com/AstrBotDevs/AstrBot.git
 export ASTRBOT_SOURCE_GIT_REF=master
 ```
 
-使用本地 AstrBot 源码（优先级最高）：
+使用本地 AstrBot 源码（`make sync-version`/`pnpm run prepare:*` 会优先使用）：
 
 ```bash
 export ASTRBOT_SOURCE_DIR=/path/to/AstrBot
+```
+
+`make build` 如需使用本地源码，请显式指定：
+
+```bash
+make build ASTRBOT_BUILD_SOURCE_DIR=/path/to/AstrBot
 ```
 
 临时测试仓库示例：
