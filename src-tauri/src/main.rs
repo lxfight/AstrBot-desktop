@@ -1658,6 +1658,7 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
   }
 
   const invoke = window.__TAURI_INTERNALS__?.invoke;
+  const transformCallback = window.__TAURI_INTERNALS__?.transformCallback;
   const tauriEvent = window.__TAURI_INTERNALS__?.event ?? window.__TAURI__?.event;
   if (typeof invoke !== 'function') return;
 
@@ -1689,6 +1690,33 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
     try {
       void invoke(BRIDGE_COMMANDS.LOG, { message });
     } catch {}
+  };
+
+  const createEventListener = async (eventName, handler) => {
+    if (typeof tauriEvent?.listen === 'function') {
+      bridgeLog('listen-register-via-global', eventName);
+      return tauriEvent.listen(eventName, handler);
+    }
+    if (typeof transformCallback !== 'function') {
+      throw new Error('transformCallback is unavailable');
+    }
+
+    bridgeLog('listen-register-via-plugin', eventName);
+    const eventId = await invoke('plugin:event|listen', {
+      event: eventName,
+      target: { kind: 'Any' },
+      handler: transformCallback(handler),
+    });
+
+    return async () => {
+      try {
+        window.__TAURI_EVENT_PLUGIN_INTERNALS__?.unregisterListener?.(eventName, eventId);
+      } catch {}
+      await invoke('plugin:event|unlisten', {
+        event: eventName,
+        eventId,
+      });
+    };
   };
 
   const trayRestartState =
@@ -1762,15 +1790,9 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
   };
 
   const listenToTrayRestartBackendEvent = async () => {
-    const listen = tauriEvent?.listen;
-    if (typeof listen !== 'function') {
-      bridgeLog('listen-api-unavailable');
-      console.warn('Tray restart backend event listen API is unavailable');
-      return;
-    }
     if (typeof trayRestartState.unlistenTrayRestartBackendEvent === 'function') return;
     try {
-      const unlisten = await listen(TRAY_RESTART_BACKEND_EVENT, (event) => {
+      const unlisten = await createEventListener(TRAY_RESTART_BACKEND_EVENT, (event) => {
         bridgeLog('event-received', `payload=${String(event?.payload ?? 'null')}`);
         emitTrayRestart(event?.payload);
       });
