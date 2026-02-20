@@ -191,6 +191,8 @@ make clean-env
 source .astrbot-reset-env.sh
 ```
 
+说明：`./.astrbot-reset-env.sh` 直接执行只会影响子 shell，不能修改你当前终端会话里的环境变量，所以需要 `source`。
+
 如果重置脚本已存在，需要显式允许覆盖：
 
 ```bash

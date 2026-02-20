@@ -51,6 +51,7 @@ help:
 	@echo "  make clean-node         Remove node_modules and pnpm store"
 	@echo "  make clean-env          Generate shell script to unset build env vars"
 	@echo "                          (set ASTRBOT_RESET_ENV_OVERWRITE=1 to overwrite existing script)"
+	@echo "                          (then source the script in current shell)"
 	@echo "  make clean              Clean all build artifacts"
 	@echo "  make clean-all          Alias of clean"
 
@@ -164,7 +165,8 @@ clean-env:
 	} > "$$reset_script"; \
 	chmod +x "$$reset_script"; \
 	echo "Generated $$reset_script"; \
-	echo "Run: source $$reset_script"
+	echo "Run: source $$reset_script"; \
+	echo "Note: executing $$reset_script directly runs in a child shell and cannot clear parent-shell env."
 
 clean: clean-rust clean-resources clean-vendor clean-node
 
