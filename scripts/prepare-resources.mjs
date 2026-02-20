@@ -209,56 +209,43 @@ const patchMonacoCssNestingWarnings = async (dashboardDir) => {
   }
 };
 
+const patchRequiredLegacyFile = async ({ filePath, transform, patchLabel, isAlreadyModern }) => {
+  if (!existsSync(filePath)) {
+    throw new Error(
+      `[prepare-resources] Missing required file for ${patchLabel}: ${path.relative(projectRoot, filePath)}`,
+    );
+  }
+
+  const source = await readFile(filePath, 'utf8');
+  const patched = transform(source);
+
+  // Invariant: transformed content must be modern/compatible.
+  if (!isAlreadyModern(patched)) {
+    throw new Error(
+      `[prepare-resources] ${patchLabel} failed invariant check in ${path.relative(projectRoot, filePath)}`,
+    );
+  }
+
+  if (patched !== source) {
+    await writeFile(filePath, patched, 'utf8');
+    console.log(
+      `[prepare-resources] Patched ${patchLabel} in ${path.relative(projectRoot, filePath)}`,
+    );
+    return;
+  }
+
+  if (!isAlreadyModern(source)) {
+    throw new Error(
+      `[prepare-resources] ${patchLabel} did not match expected legacy pattern in ${path.relative(projectRoot, filePath)}`,
+    );
+  }
+
+  console.warn(
+    `[prepare-resources] WARN: No changes applied for ${patchLabel} in ${path.relative(projectRoot, filePath)} (already compatible)`,
+  );
+};
+
 const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
-  const patchFile = async (filePath, transform, patchLabel, options = {}) => {
-    const {
-      warnOnNoChange = false,
-      failOnNoChange = false,
-      isModern = null,
-      requireFile = false,
-    } = options;
-
-    if (!existsSync(filePath)) {
-      if (requireFile) {
-        throw new Error(
-          `[prepare-resources] Missing required file for ${patchLabel}: ${path.relative(projectRoot, filePath)}`,
-        );
-      }
-      return;
-    }
-
-    const source = await readFile(filePath, 'utf8');
-    const patched = transform(source);
-
-    if (isModern && !isModern(patched)) {
-      throw new Error(
-        `[prepare-resources] ${patchLabel} failed invariant check in ${path.relative(projectRoot, filePath)}`,
-      );
-    }
-
-    if (patched !== source) {
-      await writeFile(filePath, patched, 'utf8');
-      console.log(
-        `[prepare-resources] Patched ${patchLabel} in ${path.relative(projectRoot, filePath)}`,
-      );
-      return;
-    }
-
-    const allowNoChange = isModern ? isModern(source) : false;
-    if (failOnNoChange && !allowNoChange) {
-      throw new Error(
-        `[prepare-resources] ${patchLabel} did not match expected legacy pattern in ${path.relative(projectRoot, filePath)}`,
-      );
-    }
-
-    if (warnOnNoChange) {
-      const suffix = allowNoChange ? ' (already compatible)' : '';
-      console.warn(
-        `[prepare-resources] WARN: No changes applied for ${patchLabel} in ${path.relative(projectRoot, filePath)}${suffix}`,
-      );
-    }
-  };
-
   const hasModernTrayRestartGuard = (source) =>
     /if\s*\(\s*!desktopBridge\?\.onTrayRestartBackend\s*\)\s*\{/.test(source);
   const hasModernDesktopBridgeTypes = (source) =>
@@ -271,25 +258,20 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
   const hasModernRestartCapabilityGuard = (source) =>
     source.includes('const hasDesktopRestartCapability =');
 
-  await patchFile(
-    path.join(dashboardDir, 'src', 'App.vue'),
-    (source) =>
+  await patchRequiredLegacyFile({
+    filePath: path.join(dashboardDir, 'src', 'App.vue'),
+    transform: (source) =>
       source.replace(
         /if\s*\(\s*!desktopBridge\?\.isElectron\s*\|\|\s*!desktopBridge\.onTrayRestartBackend\s*\)\s*\{/,
         'if (!desktopBridge?.onTrayRestartBackend) {',
       ),
-    'tray restart desktop guard',
-    {
-      warnOnNoChange: true,
-      failOnNoChange: true,
-      isModern: hasModernTrayRestartGuard,
-      requireFile: true,
-    },
-  );
+    patchLabel: 'tray restart desktop guard',
+    isAlreadyModern: hasModernTrayRestartGuard,
+  });
 
-  await patchFile(
-    path.join(dashboardDir, 'src', 'types', 'electron-bridge.d.ts'),
-    (source) => {
+  await patchRequiredLegacyFile({
+    filePath: path.join(dashboardDir, 'src', 'types', 'electron-bridge.d.ts'),
+    transform: (source) => {
       let patched = source;
       patched = patched.replace(/^\s+isElectron:\s*boolean;\n/m, '      isDesktop: boolean;\n');
       patched = patched.replace(
@@ -298,18 +280,13 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
       );
       return patched;
     },
-    'desktop bridge type definitions',
-    {
-      warnOnNoChange: true,
-      failOnNoChange: true,
-      isModern: hasModernDesktopBridgeTypes,
-      requireFile: true,
-    },
-  );
+    patchLabel: 'desktop bridge type definitions',
+    isAlreadyModern: hasModernDesktopBridgeTypes,
+  });
 
-  await patchFile(
-    path.join(dashboardDir, 'src', 'layouts', 'full', 'vertical-header', 'VerticalHeader.vue'),
-    (source) => {
+  await patchRequiredLegacyFile({
+    filePath: path.join(dashboardDir, 'src', 'layouts', 'full', 'vertical-header', 'VerticalHeader.vue'),
+    transform: (source) => {
       let patched = source.replaceAll(/\bisElectronApp\b/g, 'isDesktopReleaseMode');
       patched = patched.replace(
         /typeof window !== 'undefined'\s*&&\s*!!window\.astrbotDesktop\?\.isElectron/,
@@ -321,18 +298,13 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
       );
       return patched;
     },
-    'desktop update mode guards',
-    {
-      warnOnNoChange: true,
-      failOnNoChange: true,
-      isModern: (source) => !hasLegacyDesktopReleaseGuards(source),
-      requireFile: true,
-    },
-  );
+    patchLabel: 'desktop update mode guards',
+    isAlreadyModern: (source) => !hasLegacyDesktopReleaseGuards(source),
+  });
 
-  await patchFile(
-    path.join(dashboardDir, 'src', 'utils', 'restartAstrBot.ts'),
-    (source) => {
+  await patchRequiredLegacyFile({
+    filePath: path.join(dashboardDir, 'src', 'utils', 'restartAstrBot.ts'),
+    transform: (source) => {
       if (source.includes('const hasDesktopRestartCapability =')) {
         return source;
       }
@@ -355,14 +327,9 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
   if (hasDesktopRestartCapability && isDesktopRuntime) {`,
       );
     },
-    'desktop restart capability guard',
-    {
-      warnOnNoChange: true,
-      failOnNoChange: true,
-      isModern: hasModernRestartCapabilityGuard,
-      requireFile: true,
-    },
-  );
+    patchLabel: 'desktop restart capability guard',
+    isAlreadyModern: hasModernRestartCapabilityGuard,
+  });
 };
 
 const readAstrbotVersionFromPyproject = async (sourceDir) => {
