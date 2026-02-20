@@ -282,6 +282,10 @@ jobs:
           attempt=1
           # Only retry on known transient DMG detach failures.
           retry_pattern='hdiutil: detach:.*(timeout|not detached)|DiskArbitration expired'
+          detach_attempts=3
+          detach_sleep_seconds=2
+          rw_dmg_image_prefix='/src-tauri/target/'
+          rw_dmg_image_suffix_regex='/bundle/macos/rw\\..*\\.dmg$'
           log_file=""
 
           cleanup_log_file() {
@@ -295,12 +299,12 @@ jobs:
           detach_target() {
             local target="$1"
             local pass=1
-            while [ "${pass}" -le 3 ]; do
+            while [ "${pass}" -le "${detach_attempts}" ]; do
               if hdiutil detach "${target}"; then
                 return 0
               fi
               hdiutil detach -force "${target}" || true
-              sleep 2
+              sleep "${detach_sleep_seconds}"
               pass=$((pass + 1))
             done
             return 1
@@ -321,7 +325,10 @@ jobs:
             fi
 
             local workspace_disks
-            workspace_disks="$(hdiutil info 2>/dev/null | awk -v root="${workspace_root}" '
+            workspace_disks="$(hdiutil info 2>/dev/null | awk \
+              -v root="${workspace_root}" \
+              -v image_prefix="${rw_dmg_image_prefix}" \
+              -v image_suffix_re="${rw_dmg_image_suffix_regex}" '
               BEGIN { image = ""; dev = "" }
               /^image-path[[:space:]]*:/ {
                 line = $0
@@ -334,7 +341,9 @@ jobs:
                 next
               }
               /^=+/ {
-                if (image ~ root "/src-tauri/target/.*/bundle/macos/rw\\..*\\.dmg" && dev != "") {
+                if (index(image, root image_prefix) > 0 &&
+                    image ~ image_suffix_re &&
+                    dev != "") {
                   print dev
                 }
                 image = ""
@@ -342,7 +351,9 @@ jobs:
                 next
               }
               END {
-                if (image ~ root "/src-tauri/target/.*/bundle/macos/rw\\..*\\.dmg" && dev != "") {
+                if (index(image, root image_prefix) > 0 &&
+                    image ~ image_suffix_re &&
+                    dev != "") {
                   print dev
                 }
               }
