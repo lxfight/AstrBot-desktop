@@ -53,7 +53,6 @@ const TRAY_MENU_RELOAD_WINDOW: &str = "tray_reload_window";
 const TRAY_MENU_RESTART_BACKEND: &str = "tray_restart_backend";
 const TRAY_MENU_QUIT: &str = "tray_quit";
 const TRAY_RESTART_BACKEND_EVENT: &str = "astrbot://tray-restart-backend";
-const DESKTOP_BRIDGE_TRAY_EVENT_PLACEHOLDER: &str = "__ASTRBOT_TRAY_RESTART_BACKEND_EVENT__";
 const DEFAULT_SHELL_LOCALE: &str = "zh-CN";
 const STARTUP_MODE_ENV: &str = "ASTRBOT_DESKTOP_STARTUP_MODE";
 // Keep in sync with STARTUP_MODES in ui/index.html.
@@ -1627,7 +1626,7 @@ fn update_tray_menu_labels(app_handle: &AppHandle) {
     set_menu_text_safe(&tray_state.quit_item, shell_texts.tray_quit, TRAY_MENU_QUIT);
 }
 
-const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
+const DESKTOP_BRIDGE_BOOTSTRAP_TEMPLATE: &str = r#"
 (() => {
   const existingTrayRestartState = window.__astrbotDesktopTrayRestartState;
   if (
@@ -1651,7 +1650,7 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
     RESTART_BACKEND: 'desktop_bridge_restart_backend',
     STOP_BACKEND: 'desktop_bridge_stop_backend',
   });
-  const TRAY_RESTART_BACKEND_EVENT = '__ASTRBOT_TRAY_RESTART_BACKEND_EVENT__';
+  const TRAY_RESTART_BACKEND_EVENT = '{TRAY_RESTART_BACKEND_EVENT}';
 
   const invokeBridge = async (command, payload = {}) => {
     try {
@@ -1661,15 +1660,8 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
     }
   };
 
-  const createEventListener = async (eventName, handler) => {
-    const hasGlobalEventListenerApi = typeof tauriEvent?.listen === 'function';
-    const hasPluginEventListenerApi =
-      typeof invoke === 'function' && typeof transformCallback === 'function';
-
-    if (hasGlobalEventListenerApi) {
-      return tauriEvent.listen(eventName, handler);
-    }
-    if (!hasPluginEventListenerApi) {
+  const createLegacyEventListener = async (eventName, handler) => {
+    if (typeof transformCallback !== 'function') {
       throw new Error(
         'No supported Tauri event listener API: expected tauriEvent.listen or __TAURI_INTERNALS__.invoke + transformCallback'
       );
@@ -1699,6 +1691,13 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
     };
   };
 
+  const createEventListener = async (eventName, handler) => {
+    if (typeof tauriEvent?.listen === 'function') {
+      return tauriEvent.listen(eventName, handler);
+    }
+    return createLegacyEventListener(eventName, handler);
+  };
+
   const trayRestartState =
     window.__astrbotDesktopTrayRestartState ||
     (window.__astrbotDesktopTrayRestartState = {
@@ -1717,14 +1716,20 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
     trayRestartState.unlistenTrayRestartBackendEvent = null;
   }
 
-  const emitTrayRestart = (token = null) => {
+  const shouldEmitForToken = (token) => {
     const numericToken = Number(token);
     if (Number.isFinite(numericToken) && numericToken > 0) {
-      if (numericToken <= trayRestartState.lastToken) return;
+      if (numericToken <= trayRestartState.lastToken) return false;
       trayRestartState.lastToken = numericToken;
+      return true;
     } else {
       trayRestartState.lastToken += 1;
+      return true;
     }
+  };
+
+  const emitTrayRestart = (token = null) => {
+    if (!shouldEmitForToken(token)) return;
 
     if (trayRestartState.handlers.size === 0) {
       trayRestartState.pending = Number(trayRestartState.pending || 0) + 1;
@@ -2042,15 +2047,8 @@ static DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT: OnceLock<String> = OnceLock::new();
 fn desktop_bridge_bootstrap_script() -> &'static str {
     DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT
         .get_or_init(|| {
-            assert!(
-                DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE
-                    .contains(DESKTOP_BRIDGE_TRAY_EVENT_PLACEHOLDER),
-                "desktop bridge template is missing tray restart event placeholder"
-            );
-            DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE.replace(
-                DESKTOP_BRIDGE_TRAY_EVENT_PLACEHOLDER,
-                TRAY_RESTART_BACKEND_EVENT,
-            )
+            DESKTOP_BRIDGE_BOOTSTRAP_TEMPLATE
+                .replace("{TRAY_RESTART_BACKEND_EVENT}", TRAY_RESTART_BACKEND_EVENT)
         })
         .as_str()
 }
