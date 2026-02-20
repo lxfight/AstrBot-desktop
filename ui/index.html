@@ -151,26 +151,32 @@
         const status = document.getElementById("startup-status");
         if (!title || !desc || !status) return;
 
+        // Keep in sync with STARTUP_MODE_* in src-tauri/src/main.rs.
+        const STARTUP_MODES = Object.freeze({
+          LOADING: "loading",
+          PANEL_UPDATE: "panel-update",
+        });
+
         const STARTUP_COPY = {
           en: {
-            loading: {
+            [STARTUP_MODES.LOADING]: {
               title: "AstrBot Loading",
               desc: "Initializing runtime, please wait.",
               status: "Starting AstrBot...",
             },
-            "panel-update": {
+            [STARTUP_MODES.PANEL_UPDATE]: {
               title: "AstrBot Updating Panel",
               desc: "Panel updates detected. Downloading and applying now, please keep the app open.",
               status: "Downloading AstrBot panel updates...",
             },
           },
           zh: {
-            loading: {
+            [STARTUP_MODES.LOADING]: {
               title: "AstrBot 正在加载",
               desc: "正在初始化运行环境，请稍候。",
               status: "正在启动 AstrBot...",
             },
-            "panel-update": {
+            [STARTUP_MODES.PANEL_UPDATE]: {
               title: "AstrBot 正在更新面板",
               desc: "检测到面板更新，正在下载并应用，请耐心等待，不要关闭应用。",
               status: "正在下载 AstrBot 面板更新...",
@@ -179,14 +185,17 @@
         };
 
         const resolveLocaleKey = () => {
-          const locale = typeof navigator?.language === "string" ? navigator.language : "zh-CN";
+          const locale =
+            typeof navigator !== "undefined" && typeof navigator.language === "string"
+              ? navigator.language
+              : "zh-CN";
           return locale.toLowerCase().startsWith("en") ? "en" : "zh";
         };
 
         const localeKey = resolveLocaleKey();
         const resolveStartupCopy = (mode) => {
           const languageCopy = STARTUP_COPY[localeKey] || STARTUP_COPY.zh;
-          return languageCopy[mode] || languageCopy.loading;
+          return languageCopy[mode] || languageCopy[STARTUP_MODES.LOADING];
         };
 
         const applyStartupMode = (mode) => {
@@ -197,9 +206,9 @@
         };
 
         window.__astrbotSetStartupMode = (mode) => {
-          applyStartupMode(typeof mode === "string" ? mode : "loading");
+          applyStartupMode(typeof mode === "string" ? mode : STARTUP_MODES.LOADING);
         };
-        applyStartupMode("loading");
+        applyStartupMode(STARTUP_MODES.LOADING);
       })();
     </script>
   </body>

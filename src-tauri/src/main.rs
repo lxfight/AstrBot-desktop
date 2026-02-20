@@ -49,6 +49,7 @@ const TRAY_MENU_RESTART_BACKEND: &str = "tray_restart_backend";
 const TRAY_MENU_QUIT: &str = "tray_quit";
 const DEFAULT_SHELL_LOCALE: &str = "zh-CN";
 const STARTUP_MODE_ENV: &str = "ASTRBOT_DESKTOP_STARTUP_MODE";
+// Keep in sync with STARTUP_MODES in ui/index.html.
 const STARTUP_MODE_LOADING: &str = "loading";
 const STARTUP_MODE_PANEL_UPDATE: &str = "panel-update";
 #[cfg(target_os = "windows")]
@@ -2016,8 +2017,10 @@ fn should_apply_startup_loading_mode(page_url: &Url) -> bool {
 fn apply_startup_loading_mode(webview: &tauri::Webview<tauri::Wry>) {
     let app_handle = webview.app_handle();
     let mode = resolve_startup_loading_mode(app_handle);
-    let mode_js = serde_json::to_string(mode).unwrap_or_else(|_| "\"loading\"".to_string());
-    let script = format!("window.__astrbotSetStartupMode?.({mode_js});");
+    let mode_js = serde_json::to_string(mode).expect("serializing startup mode");
+    let script = format!(
+        "if (typeof window !== 'undefined' && typeof window.__astrbotSetStartupMode === 'function') {{ window.__astrbotSetStartupMode({mode_js}); }}"
+    );
     if let Err(error) = webview.eval(&script) {
         append_desktop_log(&format!("failed to apply startup loading mode: {error}"));
     }
