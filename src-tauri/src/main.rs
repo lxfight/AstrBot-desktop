@@ -322,9 +322,13 @@ impl BackendState {
             ));
         }
 
+        let mut args = vec![launch_script_path.to_string_lossy().to_string()];
+        args.push("--webui-dir".to_string());
+        args.push(webui_dir.to_string_lossy().to_string());
+
         let plan = LaunchPlan {
             cmd: python_path.to_string_lossy().to_string(),
-            args: vec![launch_script_path.to_string_lossy().to_string()],
+            args,
             cwd,
             root_dir,
             webui_dir: Some(webui_dir),
@@ -1186,7 +1190,10 @@ fn main() {
         })
         .on_page_load(|webview, payload| match payload.event() {
             PageLoadEvent::Started => {
-                append_desktop_log(&format!("page-load started: {}", payload.url()))
+                append_desktop_log(&format!("page-load started: {}", payload.url()));
+                if should_inject_desktop_bridge(webview.app_handle(), payload.url()) {
+                    inject_desktop_bridge(webview);
+                }
             }
             PageLoadEvent::Finished => {
                 append_desktop_log(&format!("page-load finished: {}", payload.url()));
@@ -2008,7 +2015,7 @@ fn should_inject_desktop_bridge(app_handle: &AppHandle, page_url: &Url) -> bool 
     let Ok(backend_url) = Url::parse(&state.backend_url) else {
         return false;
     };
-    same_origin(&backend_url, page_url)
+    tray_origin_decision(&backend_url, page_url).uses_backend_origin
 }
 
 fn inject_desktop_bridge(webview: &tauri::Webview<tauri::Wry>) {
