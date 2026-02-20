@@ -4,6 +4,25 @@ set -uo pipefail
 
 detach_attempts="${ASTRBOT_DESKTOP_MACOS_DETACH_ATTEMPTS:-3}"
 detach_sleep_seconds="${ASTRBOT_DESKTOP_MACOS_DETACH_SLEEP_SECONDS:-2}"
+
+case "${detach_attempts}" in
+  ''|*[!0-9]*) detach_attempts=3 ;;
+esac
+if [ "${detach_attempts}" -lt 1 ] 2>/dev/null; then
+  detach_attempts=1
+elif [ "${detach_attempts}" -gt 10 ] 2>/dev/null; then
+  detach_attempts=10
+fi
+
+case "${detach_sleep_seconds}" in
+  ''|*[!0-9]*) detach_sleep_seconds=2 ;;
+esac
+if [ "${detach_sleep_seconds}" -lt 1 ] 2>/dev/null; then
+  detach_sleep_seconds=1
+elif [ "${detach_sleep_seconds}" -gt 60 ] 2>/dev/null; then
+  detach_sleep_seconds=60
+fi
+
 rw_dmg_image_prefix="${ASTRBOT_DESKTOP_MACOS_RW_DMG_IMAGE_PREFIX:-/src-tauri/target/}"
 rw_dmg_image_suffix_regex="${ASTRBOT_DESKTOP_MACOS_RW_DMG_IMAGE_SUFFIX_REGEX:-/bundle/macos/rw\\..*\\.dmg$}"
 rw_dmg_mountpoint_regex="${ASTRBOT_DESKTOP_MACOS_RW_DMG_MOUNT_REGEX:-^/Volumes/(dmg\\.|rw\\.|dmg-|rw-).*}"
