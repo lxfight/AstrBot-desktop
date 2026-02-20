@@ -1147,6 +1147,20 @@ fn desktop_bridge_stop_backend(app_handle: AppHandle) -> BackendBridgeResult {
     }
 }
 
+#[tauri::command]
+fn desktop_bridge_log(message: String) {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let message = if trimmed.len() > 320 {
+        format!("{}...", &trimmed[..320])
+    } else {
+        trimmed.to_string()
+    };
+    append_desktop_log(&format!("desktop-bridge {message}"));
+}
+
 fn main() {
     append_desktop_log("desktop process starting");
     append_desktop_log(&format!(
@@ -1160,7 +1174,8 @@ fn main() {
             desktop_bridge_get_backend_state,
             desktop_bridge_set_auth_token,
             desktop_bridge_restart_backend,
-            desktop_bridge_stop_backend
+            desktop_bridge_stop_backend,
+            desktop_bridge_log
         ])
         .on_window_event(|window, event| {
             if window.label() != "main" {
@@ -1424,22 +1439,14 @@ fn emit_tray_restart_backend_event(app_handle: &AppHandle) {
         return;
     };
     let token = TRAY_RESTART_SIGNAL_TOKEN.fetch_add(1, Ordering::Relaxed) + 1;
+    append_desktop_log(&format!("tray restart signal dispatch: token={token}"));
 
     if let Err(error) = window.emit(TRAY_RESTART_BACKEND_EVENT, token) {
         append_desktop_log(&format!(
             "failed to emit tray restart backend event: {error}"
         ));
-    }
-
-    // Compatibility fallback when the JS Tauri event listener API is unavailable.
-    // The same token is used so JS can deduplicate if both paths are delivered.
-    let fallback_script = format!(
-        "if (typeof window !== 'undefined' && typeof window.__astrbotDesktopEmitTrayRestart === 'function') {{ window.__astrbotDesktopEmitTrayRestart({token}); }}"
-    );
-    if let Err(error) = window.eval(&fallback_script) {
-        append_desktop_log(&format!(
-            "failed to eval tray restart backend fallback emit: {error}"
-        ));
+    } else {
+        append_desktop_log(&format!("tray restart signal emitted: token={token}"));
     }
 }
 
@@ -1660,6 +1667,7 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
     SET_AUTH_TOKEN: 'desktop_bridge_set_auth_token',
     RESTART_BACKEND: 'desktop_bridge_restart_backend',
     STOP_BACKEND: 'desktop_bridge_stop_backend',
+    LOG: 'desktop_bridge_log',
   });
   const TRAY_RESTART_BACKEND_EVENT = '__ASTRBOT_TRAY_RESTART_BACKEND_EVENT__';
 
@@ -1669,6 +1677,18 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
     } catch (error) {
       return { ok: false, reason: String(error) };
     }
+  };
+
+  const bridgeLog = (stage, detail = '') => {
+    const stageText = String(stage || '').trim();
+    if (!stageText) return;
+    const detailText = String(detail || '').trim();
+    const message = detailText
+      ? `tray-restart ${stageText} ${detailText}`
+      : `tray-restart ${stageText}`;
+    try {
+      void invoke(BRIDGE_COMMANDS.LOG, { message });
+    } catch {}
   };
 
   const trayRestartState =
@@ -1692,7 +1712,10 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
   const emitTrayRestart = (token = null) => {
     const numericToken = Number(token);
     if (Number.isFinite(numericToken) && numericToken > 0) {
-      if (numericToken <= trayRestartState.lastToken) return;
+      if (numericToken <= trayRestartState.lastToken) {
+        bridgeLog('drop-duplicate', `token=${numericToken} last=${trayRestartState.lastToken}`);
+        return;
+      }
       trayRestartState.lastToken = numericToken;
     } else {
       trayRestartState.lastToken += 1;
@@ -1700,42 +1723,63 @@ const DESKTOP_BRIDGE_BOOTSTRAP_SCRIPT_TEMPLATE: &str = r#"
 
     if (trayRestartState.handlers.size === 0) {
       trayRestartState.pending = Number(trayRestartState.pending || 0) + 1;
+      bridgeLog(
+        'queue',
+        `token=${trayRestartState.lastToken} pending=${trayRestartState.pending}`
+      );
       return;
     }
+    bridgeLog(
+      'dispatch',
+      `token=${trayRestartState.lastToken} handlers=${trayRestartState.handlers.size}`
+    );
     for (const handler of trayRestartState.handlers) {
       try {
         handler();
-      } catch {}
+      } catch (error) {
+        bridgeLog('handler-error', String(error));
+      }
     }
   };
-  window.__astrbotDesktopEmitTrayRestart = (token) => emitTrayRestart(token);
 
   const onTrayRestartBackend = (callback) => {
     if (typeof callback !== 'function') return () => {};
     const handler = () => callback();
     trayRestartState.handlers.add(handler);
+    bridgeLog('handler-add', `count=${trayRestartState.handlers.size}`);
     while (trayRestartState.pending > 0) {
       trayRestartState.pending -= 1;
+      bridgeLog(
+        'drain-pending',
+        `token=${trayRestartState.lastToken} remaining=${trayRestartState.pending}`
+      );
       handler();
     }
-    return () => trayRestartState.handlers.delete(handler);
+    return () => {
+      trayRestartState.handlers.delete(handler);
+      bridgeLog('handler-remove', `count=${trayRestartState.handlers.size}`);
+    };
   };
 
   const listenToTrayRestartBackendEvent = async () => {
     const listen = tauriEvent?.listen;
     if (typeof listen !== 'function') {
+      bridgeLog('listen-api-unavailable');
       console.warn('Tray restart backend event listen API is unavailable');
       return;
     }
     if (typeof trayRestartState.unlistenTrayRestartBackendEvent === 'function') return;
     try {
       const unlisten = await listen(TRAY_RESTART_BACKEND_EVENT, (event) => {
+        bridgeLog('event-received', `payload=${String(event?.payload ?? 'null')}`);
         emitTrayRestart(event?.payload);
       });
       if (typeof unlisten === 'function') {
         trayRestartState.unlistenTrayRestartBackendEvent = unlisten;
+        bridgeLog('listen-registered');
       }
     } catch (error) {
+      bridgeLog('listen-failed', String(error));
       console.warn('Failed to listen for tray restart backend event', error);
     }
   };
