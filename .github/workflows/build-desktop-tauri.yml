@@ -11,6 +11,11 @@ on:
         description: AstrBot source git ref (branch/tag/sha), empty means default ref
         required: false
         default: ""
+      publish_release:
+        description: Publish GitHub Release after successful builds
+        required: false
+        type: boolean
+        default: true
   schedule:
     - cron: '0 * * * *'
 
@@ -455,7 +460,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: ${{ needs.resolve_build_context.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ needs.resolve_build_context.outputs.should_build == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')) }}
     needs:
       - resolve_build_context
       - build-linux
