@@ -88,11 +88,6 @@ make clean-env
 source .astrbot-reset-env.sh
 ```
 
-如果重置脚本已存在：
-
-```bash
-make clean-env ASTRBOT_RESET_ENV_OVERWRITE=1
-```
 
 ## CI 版本同步策略
 
