@@ -264,6 +264,34 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
     },
     'desktop update mode guards',
   );
+
+  await patchFile(
+    path.join(dashboardDir, 'src', 'utils', 'restartAstrBot.ts'),
+    (source) => {
+      if (source.includes('const hasDesktopRestartCapability =')) {
+        return source;
+      }
+      return source.replace(
+        /if\s*\(desktopBridge\?\.\w+\)\s*\{/,
+        `const hasDesktopRestartCapability =
+    !!desktopBridge &&
+    typeof desktopBridge.restartBackend === 'function' &&
+    typeof desktopBridge.isDesktopRuntime === 'function'
+
+  let isDesktopRuntime = false
+  if (hasDesktopRestartCapability) {
+    try {
+      isDesktopRuntime = !!(await desktopBridge.isDesktopRuntime())
+    } catch (_error) {
+      isDesktopRuntime = false
+    }
+  }
+
+  if (hasDesktopRestartCapability && isDesktopRuntime) {`,
+      );
+    },
+    'desktop restart capability guard',
+  );
 };
 
 const readAstrbotVersionFromPyproject = async (sourceDir) => {
