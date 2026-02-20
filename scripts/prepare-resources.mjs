@@ -214,8 +214,7 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
     const {
       warnOnNoChange = false,
       failOnNoChange = false,
-      noChangeAllowedWhen = null,
-      assertPatched = null,
+      isModern = null,
       requireFile = false,
     } = options;
 
@@ -231,7 +230,7 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
     const source = await readFile(filePath, 'utf8');
     const patched = transform(source);
 
-    if (assertPatched && !assertPatched(patched)) {
+    if (isModern && !isModern(patched)) {
       throw new Error(
         `[prepare-resources] ${patchLabel} failed invariant check in ${path.relative(projectRoot, filePath)}`,
       );
@@ -245,7 +244,7 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
       return;
     }
 
-    const allowNoChange = noChangeAllowedWhen ? noChangeAllowedWhen(source) : false;
+    const allowNoChange = isModern ? isModern(source) : false;
     if (failOnNoChange && !allowNoChange) {
       throw new Error(
         `[prepare-resources] ${patchLabel} did not match expected legacy pattern in ${path.relative(projectRoot, filePath)}`,
@@ -283,8 +282,7 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
     {
       warnOnNoChange: true,
       failOnNoChange: true,
-      noChangeAllowedWhen: hasModernTrayRestartGuard,
-      assertPatched: hasModernTrayRestartGuard,
+      isModern: hasModernTrayRestartGuard,
       requireFile: true,
     },
   );
@@ -304,8 +302,7 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
     {
       warnOnNoChange: true,
       failOnNoChange: true,
-      noChangeAllowedWhen: hasModernDesktopBridgeTypes,
-      assertPatched: hasModernDesktopBridgeTypes,
+      isModern: hasModernDesktopBridgeTypes,
       requireFile: true,
     },
   );
@@ -328,8 +325,7 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
     {
       warnOnNoChange: true,
       failOnNoChange: true,
-      noChangeAllowedWhen: (source) => !hasLegacyDesktopReleaseGuards(source),
-      assertPatched: (source) => !hasLegacyDesktopReleaseGuards(source),
+      isModern: (source) => !hasLegacyDesktopReleaseGuards(source),
       requireFile: true,
     },
   );
@@ -363,8 +359,7 @@ const patchLegacyDesktopBridgeArtifacts = async (dashboardDir) => {
     {
       warnOnNoChange: true,
       failOnNoChange: true,
-      noChangeAllowedWhen: hasModernRestartCapabilityGuard,
-      assertPatched: hasModernRestartCapabilityGuard,
+      isModern: hasModernRestartCapabilityGuard,
       requireFile: true,
     },
   );
