@@ -8,8 +8,19 @@ rw_dmg_image_prefix="${ASTRBOT_DESKTOP_MACOS_RW_DMG_IMAGE_PREFIX:-/src-tauri/tar
 rw_dmg_image_suffix_regex="${ASTRBOT_DESKTOP_MACOS_RW_DMG_IMAGE_SUFFIX_REGEX:-/bundle/macos/rw\\..*\\.dmg$}"
 rw_dmg_mountpoint_regex="${ASTRBOT_DESKTOP_MACOS_RW_DMG_MOUNT_REGEX:-^/Volumes/(dmg\\.|rw\\.|dmg-|rw-).*}"
 allow_global_helper_cleanup="${ASTRBOT_DESKTOP_MACOS_ALLOW_GLOBAL_HELPER_KILL:-0}"
-workspace_root="${ASTRBOT_DESKTOP_MACOS_WORKSPACE_ROOT:-${GITHUB_WORKSPACE:-$(pwd)}}"
+if [ -n "${ASTRBOT_DESKTOP_MACOS_WORKSPACE_ROOT:-}" ]; then
+  workspace_root="${ASTRBOT_DESKTOP_MACOS_WORKSPACE_ROOT}"
+elif [ -n "${GITHUB_WORKSPACE:-}" ]; then
+  workspace_root="${GITHUB_WORKSPACE}"
+else
+  echo "WARN: ASTRBOT_DESKTOP_MACOS_WORKSPACE_ROOT is required outside GitHub Actions; skip DMG cleanup." >&2
+  exit 0
+fi
 workspace_root="${workspace_root%/}"
+if [ -z "${workspace_root}" ] || [ ! -d "${workspace_root}" ]; then
+  echo "WARN: workspace root is invalid (${workspace_root}); skip DMG cleanup." >&2
+  exit 0
+fi
 
 declare -a canonical_path_cache_keys=()
 declare -a canonical_path_cache_values=()
