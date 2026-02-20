@@ -267,28 +267,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - << 'PY'
-          import os
-          import sys
-          from collections import defaultdict
-
-          root = "release-artifacts"
-          by_name = defaultdict(list)
-          for dirpath, _, filenames in os.walk(root):
-            for filename in filenames:
-              by_name[filename].append(os.path.join(dirpath, filename))
-
-          duplicates = {name: paths for name, paths in by_name.items() if len(paths) > 1}
-          if duplicates:
-            print("Duplicate artifact filenames detected after merge:", file=sys.stderr)
-            for name, paths in sorted(duplicates.items()):
-              print(f"- {name}", file=sys.stderr)
-              for path in sorted(paths):
-                print(f"  - {path}", file=sys.stderr)
-            sys.exit(1)
-
-          print("No duplicate artifact filenames detected.")
-          PY
+          python3 scripts/ci/validate-release-artifacts.py release-artifacts
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2.5.0
