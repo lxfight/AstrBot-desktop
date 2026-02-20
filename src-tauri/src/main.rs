@@ -1314,7 +1314,7 @@ fn main_window_uses_backend_origin(app_handle: &AppHandle) -> bool {
         return false;
     };
     let uses_backend_origin = same_backend_origin_for_tray(&backend_url, &window_url);
-    if !uses_backend_origin {
+    if !uses_backend_origin && should_log_tray_origin_mismatch(&backend_url, &window_url) {
         append_desktop_log(&format!(
             "tray restart fallback to desktop-managed flow due to origin mismatch: backend={} window={}",
             backend_url, window_url
@@ -1888,6 +1888,18 @@ fn same_backend_origin_for_tray(backend_url: &Url, window_url: &Url) -> bool {
         return true;
     }
 
+    let backend_scheme = backend_url.scheme();
+    let window_scheme = window_url.scheme();
+    if !matches!(backend_scheme, "http" | "https") || !matches!(window_scheme, "http" | "https") {
+        return false;
+    }
+
+    backend_url.port_or_known_default() == window_url.port_or_known_default()
+        && is_loopback_host(backend_url.host_str())
+        && is_loopback_host(window_url.host_str())
+}
+
+fn should_log_tray_origin_mismatch(backend_url: &Url, window_url: &Url) -> bool {
     let backend_scheme = backend_url.scheme();
     let window_scheme = window_url.scheme();
     if !matches!(backend_scheme, "http" | "https") || !matches!(window_scheme, "http" | "https") {
