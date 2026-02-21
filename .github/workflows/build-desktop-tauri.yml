@@ -434,9 +434,12 @@ jobs:
             --build-mode "${BUILD_MODE}"
             --source-git-ref "${SOURCE_GIT_REF}"
           )
-          if [ "${ASTRBOT_STRICT_ARTIFACT_FILENAME_NORMALIZATION}" = "1" ]; then
-            normalize_args+=(--strict-unmatched)
-          fi
+          strict_flag="$(printf '%s' "${ASTRBOT_STRICT_ARTIFACT_FILENAME_NORMALIZATION}" | tr '[:upper:]' '[:lower:]')"
+          case "${strict_flag}" in
+            1|true|yes|on)
+              normalize_args+=(--strict-unmatched)
+              ;;
+          esac
           python3 scripts/ci/normalize-release-artifact-filenames.py "${normalize_args[@]}"
 
       - name: Validate artifact filename uniqueness

@@ -91,6 +91,11 @@ def normalize_arch(arch: str, warned_unknown_arches: set[str]) -> str:
 def resolve_nightly_source_sha(source_git_ref: str) -> str:
     """Resolve a commit-like SHA from source_git_ref."""
     candidate = source_git_ref.strip()
+    if not candidate:
+        raise RuntimeError(
+            "nightly build requires a non-empty --source-git-ref commit SHA "
+            "(8-64 hex chars), but got an empty value"
+        )
     if HEX_SHA_PATTERN.fullmatch(candidate):
         return candidate
 
@@ -104,7 +109,8 @@ def resolve_nightly_source_sha(source_git_ref: str) -> str:
 
     raise RuntimeError(
         "nightly build requires --source-git-ref to be a hex commit SHA (8-64 chars), "
-        "or to end with one (for example: origin/<sha>)"
+        "or to end with one (for example: origin/<sha>); "
+        f"got {source_git_ref!r}"
     )
 
 
@@ -180,6 +186,9 @@ def main() -> int:
     renamed_count = 0
     skipped_count = 0
     warned_unknown_arches: set[str] = set()
+    rename_plan: list[tuple[pathlib.Path, pathlib.Path]] = []
+    target_sources: dict[pathlib.Path, list[pathlib.Path]] = {}
+    all_sources: set[pathlib.Path] = set()
 
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         if not should_normalize_file(path):
@@ -204,14 +213,48 @@ def main() -> int:
             )
 
         new_path = path.with_name(f"{final_stem}{ext}")
-        if new_path == path:
-            continue
-        if new_path.exists():
-            raise RuntimeError(f"target already exists: {new_path}")
+        all_sources.add(path)
+        target_sources.setdefault(new_path, []).append(path)
+        if new_path != path:
+            rename_plan.append((path, new_path))
 
-        path.rename(new_path)
+    collisions = {
+        target: sources for target, sources in target_sources.items() if len(sources) > 1
+    }
+    if collisions:
+        collision_details = []
+        for target, sources in sorted(collisions.items(), key=lambda item: str(item[0])):
+            source_list = ", ".join(str(source.name) for source in sorted(sources))
+            collision_details.append(f"{target.name} <= {source_list}")
+        raise RuntimeError(
+            "artifact filename normalization collision detected:\n"
+            + "\n".join(collision_details)
+        )
+
+    for source_path, target_path in rename_plan:
+        if target_path.exists() and target_path not in all_sources:
+            raise RuntimeError(
+                "artifact filename normalization target already exists and is outside "
+                f"the normalization set: source={source_path.name}, target={target_path.name}"
+            )
+
+    staged_renames: list[tuple[pathlib.Path, pathlib.Path, str]] = []
+    for index, (source_path, target_path) in enumerate(rename_plan):
+        temp_path = source_path.with_name(f".normalize_tmp_{index}_{source_path.name}")
+        while temp_path.exists():
+            temp_path = temp_path.with_name(f".normalize_tmp_{index}_{temp_path.name}")
+        source_path.rename(temp_path)
+        staged_renames.append((temp_path, target_path, source_path.name))
+
+    for staged_path, target_path, original_name in staged_renames:
+        if target_path.exists():
+            raise RuntimeError(
+                "artifact filename normalization target already exists after staging: "
+                f"source={original_name}, target={target_path.name}"
+            )
+        staged_path.rename(target_path)
         renamed_count += 1
-        print(f"[normalize-artifacts] renamed: {path.name} -> {new_path.name}")
+        print(f"[normalize-artifacts] renamed: {original_name} -> {target_path.name}")
 
     if unmatched_messages:
         if args.strict_unmatched:
