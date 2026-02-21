@@ -249,7 +249,16 @@ jobs:
           bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
           app_bundle_name="${ASTRBOT_MACOS_APP_BUNDLE_NAME}"
           if [ -z "${app_bundle_name}" ]; then
-            app_bundle_name="$(python3 -c "import json,pathlib; d=json.loads(pathlib.Path('src-tauri/tauri.conf.json').read_text(encoding='utf-8')); print(str(d.get('productName','')).strip())")"
+            if ! command -v python3 >/dev/null 2>&1; then
+              echo "python3 is required to resolve app bundle name from tauri config." >&2
+              exit 1
+            fi
+            tauri_conf_path="src-tauri/tauri.conf.json"
+            if [ ! -f "${tauri_conf_path}" ]; then
+              echo "Tauri config not found: ${tauri_conf_path}. Set ASTRBOT_MACOS_APP_BUNDLE_NAME to continue." >&2
+              exit 1
+            fi
+            app_bundle_name="$(python3 -c "import json,pathlib; d=json.loads(pathlib.Path('${tauri_conf_path}').read_text(encoding='utf-8')); print(str(d.get('productName','')).strip())")"
           fi
 
           if [ -z "${app_bundle_name}" ]; then
@@ -271,8 +280,10 @@ jobs:
             fi
           fi
 
+          app_bundle_name="$(basename "${app_path}" .app)"
+          zip_bundle_name="$(printf '%s' "${app_bundle_name}" | tr -cs 'A-Za-z0-9._-' '_')"
           zip_dir="src-tauri/target/${{ matrix.target }}/release/bundle/zip"
-          zip_path="${zip_dir}/AstrBot_${{ needs.resolve_build_context.outputs.astrbot_version }}_macos_${{ matrix.arch }}.zip"
+          zip_path="${zip_dir}/${zip_bundle_name}_${{ needs.resolve_build_context.outputs.astrbot_version }}_macos_${{ matrix.arch }}.zip"
           mkdir -p "${zip_dir}"
           ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${zip_path}"
           echo "Created ${zip_path}"
