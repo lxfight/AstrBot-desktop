@@ -17,7 +17,7 @@ on:
         type: boolean
         default: true
       build_mode:
-        description: Build mode (`auto` | `tag-poll` | `nightly`)
+        description: Build mode (`auto` | `tag-poll` | `nightly`); for workflow_dispatch, `auto` behaves as `manual`
         required: false
         type: choice
         default: auto
@@ -78,10 +78,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          DEFAULT_NIGHTLY_UTC_HOUR='3'
           source_git_url="${ASTRBOT_SOURCE_GIT_URL}"
           source_git_ref="${ASTRBOT_SOURCE_GIT_REF}"
           nightly_source_git_ref="${ASTRBOT_NIGHTLY_SOURCE_GIT_REF:-master}"
-          nightly_utc_hour="${ASTRBOT_NIGHTLY_UTC_HOUR:-3}"
+          nightly_utc_hour="${ASTRBOT_NIGHTLY_UTC_HOUR:-${DEFAULT_NIGHTLY_UTC_HOUR}}"
           requested_build_mode="$(printf '%s' "${WORKFLOW_BUILD_MODE:-auto}" | tr '[:upper:]' '[:lower:]')"
           should_build="true"
           build_mode="manual"
@@ -93,23 +94,23 @@ jobs:
           case "${requested_build_mode}" in
             auto|tag-poll|nightly) ;;
             *)
-              echo "WARN: invalid build_mode input '${requested_build_mode}', fallback to auto."
-              requested_build_mode="auto"
+              echo "::error::invalid build_mode input '${requested_build_mode}'; expected one of: auto, tag-poll, nightly."
+              exit 1
               ;;
           esac
 
           case "${nightly_utc_hour}" in
             '')
-              nightly_utc_hour="3"
+              nightly_utc_hour="${DEFAULT_NIGHTLY_UTC_HOUR}"
               ;;
             *[!0-9]*)
-              echo "WARN: non-numeric ASTRBOT_NIGHTLY_UTC_HOUR=${nightly_utc_hour}, fallback to 3."
-              nightly_utc_hour="3"
+              echo "WARN: non-numeric ASTRBOT_NIGHTLY_UTC_HOUR=${nightly_utc_hour}, fallback to ${DEFAULT_NIGHTLY_UTC_HOUR}."
+              nightly_utc_hour="${DEFAULT_NIGHTLY_UTC_HOUR}"
               ;;
           esac
           if [ "${nightly_utc_hour}" -gt 23 ] 2>/dev/null; then
-            echo "WARN: invalid ASTRBOT_NIGHTLY_UTC_HOUR=${nightly_utc_hour}, fallback to 3."
-            nightly_utc_hour="3"
+            echo "WARN: invalid ASTRBOT_NIGHTLY_UTC_HOUR=${nightly_utc_hour}, fallback to ${DEFAULT_NIGHTLY_UTC_HOUR}."
+            nightly_utc_hour="${DEFAULT_NIGHTLY_UTC_HOUR}"
           fi
           nightly_utc_hour_padded="$(printf '%02d' "${nightly_utc_hour}")"
 
@@ -127,6 +128,8 @@ jobs:
               build_mode="tag-poll"
             elif [ "${requested_build_mode}" = "nightly" ]; then
               build_mode="nightly"
+            else
+              echo "workflow_dispatch build_mode=auto: using manual mode."
             fi
           fi
 
