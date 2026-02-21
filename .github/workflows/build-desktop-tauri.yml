@@ -147,15 +147,30 @@ jobs:
           fi
 
           if [ "${build_mode}" = "nightly" ]; then
+            nightly_branch="${nightly_source_git_ref}"
+            if [ -z "${nightly_branch}" ]; then
+              echo "ASTRBOT_NIGHTLY_SOURCE_GIT_REF must be set to a branch name or refs/heads/<branch> for nightly builds." >&2
+              exit 1
+            fi
+            case "${nightly_branch}" in
+              refs/heads/*)
+                echo "Normalizing nightly source ref '${nightly_branch}' to branch name for git ls-remote."
+                nightly_branch="${nightly_branch#refs/heads/}"
+                ;;
+              refs/*)
+                echo "ASTRBOT_NIGHTLY_SOURCE_GIT_REF must be a branch name or refs/heads/<branch>; got '${nightly_branch}'." >&2
+                exit 1
+                ;;
+            esac
             source_git_ref="$(
-              git ls-remote "${source_git_url}" "refs/heads/${nightly_source_git_ref}" \
+              git ls-remote "${source_git_url}" "refs/heads/${nightly_branch}" \
                 | awk 'NR==1{print $1}'
             )"
             if [ -z "${source_git_ref}" ]; then
-              echo "Unable to resolve latest commit from ${source_git_url} refs/heads/${nightly_source_git_ref}" >&2
+              echo "Unable to resolve latest commit from ${source_git_url} refs/heads/${nightly_branch} (configured ASTRBOT_NIGHTLY_SOURCE_GIT_REF='${nightly_source_git_ref}')." >&2
               exit 1
             fi
-            echo "Nightly source resolved from ${nightly_source_git_ref}@${source_git_ref}"
+            echo "Nightly source resolved from ${nightly_branch}@${source_git_ref} (configured ASTRBOT_NIGHTLY_SOURCE_GIT_REF='${nightly_source_git_ref}')."
           elif [ "${build_mode}" = "tag-poll" ]; then
             latest_tag="$(git ls-remote --tags --refs "${source_git_url}" \
               | awk '{print $2}' \
