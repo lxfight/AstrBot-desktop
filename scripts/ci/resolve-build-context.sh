@@ -143,33 +143,51 @@ if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
   else
     publish_release="false"
   fi
-  if [ "${requested_build_mode}" = "auto" ]; then
-    echo "::warning::workflow_dispatch build_mode=auto is deprecated; normalized to tag-poll."
-    build_mode="tag-poll"
-  else
-    build_mode="${requested_build_mode}"
-  fi
-  if [ "${build_mode}" = "tag-poll" ]; then
-    echo "::notice::workflow_dispatch tag-poll selected. Prefer schedule runs for routine tag polling."
-  fi
 fi
 
-if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
-  current_utc_hour="$(date -u +%H)"
-  if [ "${current_utc_hour}" = "${nightly_utc_hour_padded}" ]; then
-    build_mode="nightly"
+# Normalize build mode in one place to keep behavior explicit and predictable.
+case "${GITHUB_EVENT_NAME}" in
+  workflow_dispatch)
+    if [ "${requested_build_mode}" = "auto" ]; then
+      echo "::warning::workflow_dispatch build_mode=auto is deprecated; normalized to tag-poll."
+      build_mode="tag-poll"
+    else
+      build_mode="${requested_build_mode}"
+    fi
+    if [ "${build_mode}" = "tag-poll" ]; then
+      echo "::notice::workflow_dispatch tag-poll selected. Prefer schedule runs for routine tag polling."
+    fi
+    ;;
+  schedule)
     publish_release="true"
-    echo "Scheduled nightly run at UTC hour ${current_utc_hour}."
-  else
-    build_mode="tag-poll"
-    publish_release="true"
-    echo "Scheduled tag polling run at UTC hour ${current_utc_hour}."
-  fi
-fi
-
-if [ "${build_mode}" = "auto" ]; then
-  build_mode="tag-poll"
-fi
+    current_utc_hour="$(date -u +%H)"
+    if [ "${requested_build_mode}" = "auto" ]; then
+      if [ "${current_utc_hour}" = "${nightly_utc_hour_padded}" ]; then
+        build_mode="nightly"
+        echo "::notice::schedule build_mode=auto resolved to nightly at UTC hour ${current_utc_hour}."
+      else
+        build_mode="tag-poll"
+        echo "::notice::schedule build_mode=auto resolved to tag-poll at UTC hour ${current_utc_hour} (nightly hour ${nightly_utc_hour_padded})."
+      fi
+    else
+      build_mode="${requested_build_mode}"
+      echo "::notice::schedule run using explicit WORKFLOW_BUILD_MODE=${build_mode}."
+    fi
+    if [ "${build_mode}" = "nightly" ]; then
+      echo "Scheduled nightly run at UTC hour ${current_utc_hour}."
+    elif [ "${build_mode}" = "tag-poll" ]; then
+      echo "Scheduled tag polling run at UTC hour ${current_utc_hour}."
+    fi
+    ;;
+  *)
+    if [ "${requested_build_mode}" = "auto" ]; then
+      build_mode="tag-poll"
+      echo "::notice::${GITHUB_EVENT_NAME} build_mode=auto normalized to tag-poll."
+    else
+      build_mode="${requested_build_mode}"
+    fi
+    ;;
+esac
 
 retry_attempts="$(
   sanitize_positive_int \
