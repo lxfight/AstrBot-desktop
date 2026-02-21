@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::os::windows::process::CommandExt;
 use std::{
     borrow::Cow,
+    collections::HashSet,
     env,
     ffi::OsString,
     fs::{self, OpenOptions},
@@ -68,8 +69,7 @@ static BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 static BRIDGE_BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 static DESKTOP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static TRAY_RESTART_SIGNAL_TOKEN: AtomicU64 = AtomicU64::new(0);
-static BACKEND_PATH_AUGMENT_LOGGED: AtomicBool = AtomicBool::new(false);
-static BACKEND_PATH_AUGMENT_CACHE: OnceLock<Option<BackendPathAugment>> = OnceLock::new();
+static BACKEND_PATH_AUGMENT: OnceLock<BackendPathAugment> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 struct ShellTexts {
@@ -432,24 +432,9 @@ impl BackendState {
                 "PYTHONIOENCODING",
                 env::var("PYTHONIOENCODING").unwrap_or_else(|_| "utf-8".to_string()),
             );
-        if let Some(path_augment) = backend_path_augment() {
+        let path_augment = backend_path_augment();
+        if !path_augment.prepend_entries.is_empty() {
             command.env("PATH", &path_augment.path);
-            if !path_augment.prepend_entries.is_empty()
-                && BACKEND_PATH_AUGMENT_LOGGED
-                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-            {
-                let preview = path_augment
-                    .prepend_entries
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                append_desktop_log(&format!(
-                    "backend PATH augmented with {} prepended directories: {preview}",
-                    path_augment.prepend_entries.len()
-                ));
-            }
         }
         #[cfg(target_os = "windows")]
         {
@@ -2307,65 +2292,77 @@ fn detect_astrbot_source_root() -> Option<PathBuf> {
 }
 
 fn default_packaged_root_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".astrbot"))
+    home::home_dir().map(|home| home.join(".astrbot"))
 }
 
-fn push_path_candidate(target: &mut Vec<PathBuf>, existing: &[PathBuf], candidate: PathBuf) {
+fn path_dedup_key(path: &Path) -> OsString {
+    let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(target_os = "windows")]
+    {
+        OsString::from(normalized.as_os_str().to_string_lossy().to_lowercase())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        normalized.into_os_string()
+    }
+}
+
+fn push_path_candidate(
+    target: &mut Vec<PathBuf>,
+    seen_keys: &mut HashSet<OsString>,
+    candidate: PathBuf,
+) {
     if candidate.as_os_str().is_empty() || !candidate.exists() {
         return;
     }
-    if target.iter().any(|path| path == &candidate)
-        || existing.iter().any(|path| path == &candidate)
-    {
+    if !seen_keys.insert(path_dedup_key(&candidate)) {
         return;
     }
     target.push(candidate);
 }
 
-fn backend_path_augment() -> Option<&'static BackendPathAugment> {
-    BACKEND_PATH_AUGMENT_CACHE
-        .get_or_init(build_backend_augmented_path)
-        .as_ref()
+fn backend_path_augment() -> &'static BackendPathAugment {
+    BACKEND_PATH_AUGMENT.get_or_init(build_backend_augmented_path)
 }
 
-fn build_backend_augmented_path() -> Option<BackendPathAugment> {
+fn build_backend_augmented_path() -> BackendPathAugment {
     let existing_path = env::var_os("PATH").unwrap_or_default();
     let existing_entries: Vec<PathBuf> = env::split_paths(&existing_path).collect();
+    let mut seen_keys: HashSet<OsString> = existing_entries
+        .iter()
+        .map(|path| path_dedup_key(path))
+        .collect();
 
     let mut prepend_entries: Vec<PathBuf> = Vec::new();
     if let Some(extra_path_raw) = env::var_os("ASTRBOT_DESKTOP_EXTRA_PATH") {
         for path in env::split_paths(&extra_path_raw) {
-            push_path_candidate(&mut prepend_entries, &existing_entries, path);
+            push_path_candidate(&mut prepend_entries, &mut seen_keys, path);
         }
     }
 
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home::home_dir() {
         push_path_candidate(
             &mut prepend_entries,
-            &existing_entries,
+            &mut seen_keys,
             home.join(".local").join("bin"),
         );
         #[cfg(target_os = "macos")]
         {
             push_path_candidate(
                 &mut prepend_entries,
-                &existing_entries,
+                &mut seen_keys,
                 home.join(".nvm").join("current").join("bin"),
             );
         }
     }
 
     if let Some(nvm_bin) = env::var_os("NVM_BIN") {
-        push_path_candidate(
-            &mut prepend_entries,
-            &existing_entries,
-            PathBuf::from(nvm_bin),
-        );
+        push_path_candidate(&mut prepend_entries, &mut seen_keys, PathBuf::from(nvm_bin));
     }
     if let Some(volta_home) = env::var_os("VOLTA_HOME") {
         push_path_candidate(
             &mut prepend_entries,
-            &existing_entries,
+            &mut seen_keys,
             PathBuf::from(volta_home).join("bin"),
         );
     }
@@ -2378,7 +2375,7 @@ fn build_backend_augmented_path() -> Option<BackendPathAugment> {
             "/usr/local/bin",
             "/usr/local/sbin",
         ] {
-            push_path_candidate(&mut prepend_entries, &existing_entries, PathBuf::from(raw));
+            push_path_candidate(&mut prepend_entries, &mut seen_keys, PathBuf::from(raw));
         }
     }
 
@@ -2387,39 +2384,52 @@ fn build_backend_augmented_path() -> Option<BackendPathAugment> {
         if let Some(app_data) = env::var_os("APPDATA") {
             push_path_candidate(
                 &mut prepend_entries,
-                &existing_entries,
+                &mut seen_keys,
                 PathBuf::from(app_data).join("npm"),
             );
         }
         if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
             push_path_candidate(
                 &mut prepend_entries,
-                &existing_entries,
+                &mut seen_keys,
                 PathBuf::from(&local_app_data)
                     .join("Programs")
                     .join("nodejs"),
             );
             push_path_candidate(
                 &mut prepend_entries,
-                &existing_entries,
+                &mut seen_keys,
                 PathBuf::from(local_app_data).join("nvm"),
             );
         }
     }
 
-    if prepend_entries.is_empty() {
-        return None;
-    }
-
-    match env::join_paths(prepend_entries.iter().chain(existing_entries.iter())) {
-        Ok(path) => Some(BackendPathAugment {
-            path,
-            prepend_entries,
-        }),
-        Err(error) => {
-            append_desktop_log(&format!("failed to build augmented backend PATH: {error}"));
-            None
+    let path = if prepend_entries.is_empty() {
+        existing_path
+    } else {
+        match env::join_paths(prepend_entries.iter().chain(existing_entries.iter())) {
+            Ok(path) => {
+                let preview = prepend_entries
+                    .iter()
+                    .map(|entry| entry.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                append_desktop_log(&format!(
+                    "backend PATH augmented with {} prepended directories: {preview}",
+                    prepend_entries.len()
+                ));
+                path
+            }
+            Err(error) => {
+                append_desktop_log(&format!("failed to build augmented backend PATH: {error}"));
+                existing_path
+            }
         }
+    };
+
+    BackendPathAugment {
+        path,
+        prepend_entries,
     }
 }
 
