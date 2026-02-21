@@ -2342,14 +2342,14 @@ fn build_backend_augmented_path() -> Option<(OsString, Vec<PathBuf>)> {
         }
     }
 
-    if let Ok(nvm_bin) = env::var("NVM_BIN") {
+    if let Some(nvm_bin) = env::var_os("NVM_BIN") {
         push_path_candidate(
             &mut prepend_entries,
             &existing_entries,
             PathBuf::from(nvm_bin),
         );
     }
-    if let Ok(volta_home) = env::var("VOLTA_HOME") {
+    if let Some(volta_home) = env::var_os("VOLTA_HOME") {
         push_path_candidate(
             &mut prepend_entries,
             &existing_entries,
@@ -2371,14 +2371,14 @@ fn build_backend_augmented_path() -> Option<(OsString, Vec<PathBuf>)> {
 
     #[cfg(target_os = "windows")]
     {
-        if let Ok(app_data) = env::var("APPDATA") {
+        if let Some(app_data) = env::var_os("APPDATA") {
             push_path_candidate(
                 &mut prepend_entries,
                 &existing_entries,
                 PathBuf::from(app_data).join("npm"),
             );
         }
-        if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
             push_path_candidate(
                 &mut prepend_entries,
                 &existing_entries,
@@ -2398,10 +2398,7 @@ fn build_backend_augmented_path() -> Option<(OsString, Vec<PathBuf>)> {
         return None;
     }
 
-    let mut merged_entries = prepend_entries.clone();
-    merged_entries.extend(existing_entries);
-
-    match env::join_paths(merged_entries) {
+    match env::join_paths(prepend_entries.iter().chain(existing_entries.iter())) {
         Ok(path) => Some((path, prepend_entries)),
         Err(error) => {
             append_desktop_log(&format!("failed to build augmented backend PATH: {error}"));
