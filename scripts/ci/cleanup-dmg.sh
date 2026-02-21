@@ -13,6 +13,7 @@ set -uo pipefail
 
 detach_attempts="${ASTRBOT_DESKTOP_MACOS_DETACH_ATTEMPTS:-3}"
 detach_sleep_seconds="${ASTRBOT_DESKTOP_MACOS_DETACH_SLEEP_SECONDS:-2}"
+detach_pre_sleep_seconds="${ASTRBOT_DESKTOP_MACOS_DETACH_PRE_SLEEP_SECONDS:-8}"
 
 case "${detach_attempts}" in
   ''|*[!0-9]*) detach_attempts=3 ;;
@@ -30,6 +31,15 @@ if [ "${detach_sleep_seconds}" -lt 1 ] 2>/dev/null; then
   detach_sleep_seconds=1
 elif [ "${detach_sleep_seconds}" -gt 60 ] 2>/dev/null; then
   detach_sleep_seconds=60
+fi
+
+case "${detach_pre_sleep_seconds}" in
+  ''|*[!0-9]*) detach_pre_sleep_seconds=8 ;;
+esac
+if [ "${detach_pre_sleep_seconds}" -lt 0 ] 2>/dev/null; then
+  detach_pre_sleep_seconds=0
+elif [ "${detach_pre_sleep_seconds}" -gt 120 ] 2>/dev/null; then
+  detach_pre_sleep_seconds=120
 fi
 
 rw_dmg_image_prefix="${ASTRBOT_DESKTOP_MACOS_RW_DMG_IMAGE_PREFIX:-/src-tauri/target/}"
@@ -122,9 +132,17 @@ select_canonicalize_tool
 detach_target() {
   local target="$1"
   local pass=1
+  if [ "${detach_pre_sleep_seconds}" -gt 0 ]; then
+    echo "Sleeping ${detach_pre_sleep_seconds}s before detaching ${target}" >&2
+    sleep "${detach_pre_sleep_seconds}"
+  fi
   while [ "${pass}" -le "${detach_attempts}" ]; do
     if hdiutil detach "${target}" >/dev/null 2>&1; then
       return 0
+    fi
+    if command -v diskutil >/dev/null 2>&1; then
+      diskutil unmountDisk force "${target}" >/dev/null 2>&1 || true
+      diskutil unmount force "${target}" >/dev/null 2>&1 || true
     fi
     hdiutil detach -force "${target}" >/dev/null 2>&1 || true
     sleep "${detach_sleep_seconds}"
@@ -184,6 +202,7 @@ log_cleanup_configuration() {
   echo "  canonicalize_tool=${canonicalize_tool}" >&2
   echo "  detach_attempts=${detach_attempts}" >&2
   echo "  detach_sleep_seconds=${detach_sleep_seconds}" >&2
+  echo "  detach_pre_sleep_seconds=${detach_pre_sleep_seconds}" >&2
   echo "  rw_dmg_image_prefix=${rw_dmg_image_prefix}" >&2
   echo "  rw_dmg_image_suffix_regex=${rw_dmg_image_suffix_regex}" >&2
   echo "  rw_dmg_mountpoint_regex=${rw_dmg_mountpoint_regex}" >&2
@@ -261,6 +280,31 @@ terminate_pid_soft_then_hard() {
   fi
 }
 
+kill_mount_holders() {
+  local mount_point="$1"
+  if ! command -v lsof >/dev/null 2>&1; then
+    return 0
+  fi
+  local holder_pids
+  holder_pids="$(lsof -t +D "${mount_point}" 2>/dev/null | awk 'NF' | sort -u || true)"
+  if [ -z "${holder_pids}" ]; then
+    return 0
+  fi
+
+  while IFS= read -r pid; do
+    [ -z "${pid}" ] && continue
+    [ "${pid}" = "$$" ] && continue
+    local proc_name=""
+    proc_name="$(ps -p "${pid}" -o comm= 2>/dev/null | awk 'NF{print; exit}' || true)"
+    if [ -n "${proc_name}" ]; then
+      echo "Killing mount-holder pid=${pid} (${proc_name}) for ${mount_point}" >&2
+    else
+      echo "Killing mount-holder pid=${pid} for ${mount_point}" >&2
+    fi
+    terminate_pid_soft_then_hard "${pid}"
+  done <<< "${holder_pids}"
+}
+
 cleanup_stale_dmg_state() {
   local dmg_mounts
   dmg_mounts="$(mount | awk -F ' on | \\(' -v mount_regex="${rw_dmg_mountpoint_regex}" '
@@ -270,6 +314,7 @@ cleanup_stale_dmg_state() {
     while IFS= read -r mount_point; do
       [ -z "${mount_point}" ] && continue
       echo "Detaching stale mount ${mount_point}"
+      kill_mount_holders "${mount_point}"
       detach_target "${mount_point}" || true
     done <<< "${dmg_mounts}"
   fi
