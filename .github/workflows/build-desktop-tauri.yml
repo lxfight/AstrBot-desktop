@@ -421,39 +421,90 @@ jobs:
       - name: Show artifacts
         run: find release-artifacts -type f | sort
 
-      - name: Normalize nightly artifact filenames
-        if: ${{ needs.resolve_build_context.outputs.build_mode == 'nightly' }}
+      - name: Normalize release artifact filenames
         env:
+          BUILD_MODE: ${{ needs.resolve_build_context.outputs.build_mode }}
           SOURCE_GIT_REF: ${{ needs.resolve_build_context.outputs.source_git_ref }}
         shell: bash
         run: |
           set -euo pipefail
-          short_sha="$(printf '%s' "${SOURCE_GIT_REF}" | cut -c1-8)"
-          suffix="-nightly-${short_sha}"
-          python3 - "${suffix}" <<'PY'
+          python3 <<'PY'
+          import os
           import pathlib
           import re
-          import sys
 
-          suffix = sys.argv[1]
+          build_mode = os.environ.get("BUILD_MODE", "").strip().lower()
+          source_git_ref = os.environ.get("SOURCE_GIT_REF", "").strip()
+          is_nightly = build_mode == "nightly"
+          short_sha = source_git_ref[:8]
+          nightly_suffix = f"-nightly-{short_sha}" if is_nightly else ""
+          if is_nightly and len(short_sha) < 7:
+              raise RuntimeError(
+                  "nightly build requires SOURCE_GIT_REF commit-like value to derive short sha suffix"
+              )
+
           root = pathlib.Path("release-artifacts")
           nightly_date_pattern = re.compile(r"-nightly\.[0-9]{8}\.[0-9a-fA-F]{7,40}")
           nightly_hash_pattern = re.compile(r"-nightly-[0-9a-fA-F]{7,40}")
+          arch_alias = {
+              "x86_64": "amd64",
+              "x64": "amd64",
+              "amd64": "amd64",
+              "aarch64": "arm64",
+              "arm64": "arm64",
+          }
+
+          def normalize_arch(arch: str) -> str:
+              return arch_alias.get(arch, arch)
 
           def canonicalize_stem(stem: str, ext: str) -> str:
-              # RPMs are emitted as AstrBot-<ver>-<rel>.<arch>; normalize separators.
+              # RPM: AstrBot-<ver>-<rel>.<arch> or AstrBot_<ver>_<arch>
               if ext == ".rpm":
-                  match = re.fullmatch(r"AstrBot-(\d+\.\d+\.\d+)-\d+\.(x86_64|aarch64)", stem)
+                  match = re.fullmatch(r"AstrBot-([0-9A-Za-z.+-]+)-\d+\.(x86_64|aarch64|amd64|arm64)", stem)
                   if match:
                       version, arch = match.groups()
-                      return f"AstrBot_{version}_{arch}"
+                      return f"AstrBot_{version}_{normalize_arch(arch)}"
+                  match = re.fullmatch(r"AstrBot_([0-9A-Za-z.+-]+)_(x86_64|aarch64|x64|amd64|arm64)", stem)
+                  if match:
+                      version, arch = match.groups()
+                      return f"AstrBot_{version}_{normalize_arch(arch)}"
 
-              # Windows NSIS installers use "-setup"; normalize to "_setup".
-              if ext == ".exe":
-                  match = re.fullmatch(r"AstrBot_(\d+\.\d+\.\d+)_([A-Za-z0-9_]+)-setup", stem)
+              # DEB: AstrBot_<ver>_<arch>
+              if ext == ".deb":
+                  match = re.fullmatch(r"AstrBot_([0-9A-Za-z.+-]+)_(x86_64|aarch64|x64|amd64|arm64)", stem)
                   if match:
                       version, arch = match.groups()
-                      return f"AstrBot_{version}_{arch}_setup"
+                      return f"AstrBot_{version}_{normalize_arch(arch)}"
+
+              # EXE: AstrBot_<ver>_<arch>-setup or _setup
+              if ext == ".exe":
+                  match = re.fullmatch(
+                      r"AstrBot_([0-9A-Za-z.+-]+)_(x86_64|aarch64|x64|amd64|arm64)(?:-setup|_setup)",
+                      stem,
+                  )
+                  if match:
+                      version, arch = match.groups()
+                      return f"AstrBot_{version}_{normalize_arch(arch)}_setup"
+
+              # MSI: AstrBot_<ver>_<arch>_<locale>
+              if ext == ".msi":
+                  match = re.fullmatch(
+                      r"AstrBot_([0-9A-Za-z.+-]+)_(x86_64|aarch64|x64|amd64|arm64)_([A-Za-z0-9-]+)",
+                      stem,
+                  )
+                  if match:
+                      version, arch, locale = match.groups()
+                      return f"AstrBot_{version}_{normalize_arch(arch)}_{locale}"
+
+              # macOS zip: AstrBot_<ver>_macos_<arch>
+              if ext == ".zip":
+                  match = re.fullmatch(
+                      r"AstrBot_([0-9A-Za-z.+-]+)_macos_(x86_64|aarch64|x64|amd64|arm64)",
+                      stem,
+                  )
+                  if match:
+                      version, arch = match.groups()
+                      return f"AstrBot_{version}_macos_{normalize_arch(arch)}"
 
               return stem
 
@@ -463,8 +514,8 @@ jobs:
               normalized_stem = nightly_date_pattern.sub("", stem)
               normalized_stem = nightly_hash_pattern.sub("", normalized_stem)
               normalized_stem = canonicalize_stem(normalized_stem, ext)
-              if not normalized_stem.endswith(suffix):
-                  normalized_stem = f"{normalized_stem}{suffix}"
+              if nightly_suffix and not normalized_stem.endswith(nightly_suffix):
+                  normalized_stem = f"{normalized_stem}{nightly_suffix}"
               new_path = path.with_name(f"{normalized_stem}{ext}")
               if new_path == path:
                   continue
