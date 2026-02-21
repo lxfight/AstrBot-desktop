@@ -86,12 +86,12 @@ source_git_ref="${ASTRBOT_SOURCE_GIT_REF}"
 nightly_source_git_ref="${ASTRBOT_NIGHTLY_SOURCE_GIT_REF:-master}"
 nightly_utc_hour="${ASTRBOT_NIGHTLY_UTC_HOUR:-${DEFAULT_NIGHTLY_UTC_HOUR}}"
 if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-  requested_build_mode="$(printf '%s' "${WORKFLOW_BUILD_MODE:-tag-poll}" | tr '[:upper:]' '[:lower:]')"
+  requested_build_mode="$(printf '%s' "${WORKFLOW_BUILD_MODE:-nightly}" | tr '[:upper:]' '[:lower:]')"
 else
   requested_build_mode="auto"
 fi
 should_build="true"
-build_mode="tag-poll"
+build_mode="nightly"
 publish_release="false"
 release_tag=""
 release_name=""
@@ -140,6 +140,9 @@ if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
     build_mode="tag-poll"
   else
     build_mode="${requested_build_mode}"
+  fi
+  if [ "${build_mode}" = "tag-poll" ]; then
+    echo "::notice::workflow_dispatch tag-poll selected. Prefer schedule runs for routine tag polling."
   fi
 fi
 
