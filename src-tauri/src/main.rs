@@ -2555,6 +2555,41 @@ fn compute_followup_wait(timeout: Duration, max_extra_wait: Duration) -> Duratio
     }
 }
 
+#[cfg(target_os = "windows")]
+fn resolve_windows_graceful_wait_timeout(
+    pid: u32,
+    timeout: Duration,
+    graceful_status: &io::Result<ExitStatus>,
+) -> Duration {
+    match graceful_status {
+        Ok(status) if status.success() => timeout,
+        Ok(status) => {
+            let shortened_wait =
+                timeout.min(Duration::from_millis(WINDOWS_GRACEFUL_STOP_NONZERO_WAIT_MS));
+            if shortened_wait < timeout {
+                append_desktop_log(&format!(
+                    "taskkill graceful stop returned non-zero; shorten graceful wait: pid={pid}, status={status:?}, requested_wait_ms={}, effective_wait_ms={}",
+                    timeout.as_millis(),
+                    shortened_wait.as_millis()
+                ));
+            }
+            shortened_wait
+        }
+        Err(error) => {
+            let shortened_wait =
+                timeout.min(Duration::from_millis(WINDOWS_GRACEFUL_STOP_NONZERO_WAIT_MS));
+            if shortened_wait < timeout {
+                append_desktop_log(&format!(
+                    "taskkill graceful stop failed to start; shorten graceful wait: pid={pid}, error={error}, requested_wait_ms={}, effective_wait_ms={}",
+                    timeout.as_millis(),
+                    shortened_wait.as_millis()
+                ));
+            }
+            shortened_wait
+        }
+    }
+}
+
 /// Attempt to stop a child process gracefully within `timeout`.
 ///
 /// On the force-kill path, a follow-up wait is derived from `timeout` (`timeout / 4`)
@@ -2573,41 +2608,12 @@ fn stop_child_process_gracefully(child: &mut Child, timeout: Duration) -> bool {
         &["/pid", &pid_arg, "/t"],
     );
 
-    let graceful_wait_timeout = match &graceful_status {
-        Ok(status) if status.success() => timeout,
-        Ok(status) => {
-            let shortened_wait =
-                timeout.min(Duration::from_millis(WINDOWS_GRACEFUL_STOP_NONZERO_WAIT_MS));
-            append_desktop_log(&format!(
-                "taskkill graceful stop returned non-zero; skip long graceful wait: pid={pid}, status={status:?}, effective_wait_ms={}",
-                shortened_wait.as_millis()
-            ));
-            shortened_wait
-        }
-        Err(error) => {
-            let shortened_wait =
-                timeout.min(Duration::from_millis(WINDOWS_GRACEFUL_STOP_NONZERO_WAIT_MS));
-            append_desktop_log(&format!(
-                "taskkill graceful stop failed to start; skip long graceful wait: pid={pid}, error={error}, effective_wait_ms={}",
-                shortened_wait.as_millis()
-            ));
-            shortened_wait
-        }
-    };
+    let graceful_wait_timeout =
+        resolve_windows_graceful_wait_timeout(pid, timeout, &graceful_status);
 
-    let graceful_wait_start = Instant::now();
     if wait_for_child_exit(child, graceful_wait_timeout) {
-        append_desktop_log(&format!(
-            "child exited during graceful wait: pid={pid}, elapsed_ms={}, wait_budget_ms={}",
-            graceful_wait_start.elapsed().as_millis(),
-            graceful_wait_timeout.as_millis()
-        ));
         return true;
     }
-    append_desktop_log(&format!(
-        "child still running after graceful wait timeout: pid={pid}, timeout_ms={}",
-        graceful_wait_timeout.as_millis()
-    ));
 
     let force_status = run_stop_command(
         pid,
