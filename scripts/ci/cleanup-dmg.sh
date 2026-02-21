@@ -344,20 +344,13 @@ kill_mount_holders() {
   if [ "${lsof_timeout_tool}" = "gtimeout" ] || [ "${lsof_timeout_tool}" = "timeout" ]; then
     local lsof_output=""
     local lsof_status=0
-    local started_at=0
-    local ended_at=0
-    local elapsed=0
-    started_at="$(date +%s 2>/dev/null || echo 0)"
     lsof_output="$("${lsof_timeout_tool}" "${lsof_timeout_seconds}" lsof -t +D "${mount_point}" 2>/dev/null)" || lsof_status=$?
-    ended_at="$(date +%s 2>/dev/null || echo 0)"
-    if [ "${started_at}" -gt 0 ] && [ "${ended_at}" -ge "${started_at}" ]; then
-      elapsed=$((ended_at - started_at))
-    fi
-    if [ "${lsof_status}" -ne 0 ] && [ "${elapsed}" -ge "${lsof_timeout_seconds}" ]; then
+    if [ "${lsof_status}" -eq 124 ]; then
       echo "WARN: lsof timed out while scanning ${mount_point}; skip mount-holder cleanup." >&2
       return 0
     fi
     if [ "${lsof_status}" -ne 0 ] && [ -z "${lsof_output}" ]; then
+      echo "WARN: lsof failed while scanning ${mount_point} (tool=${lsof_timeout_tool}, exit=${lsof_status}); skip mount-holder cleanup." >&2
       return 0
     fi
     holder_pids="$(printf '%s\n' "${lsof_output}" | awk 'NF' | sort -u)"
@@ -394,6 +387,7 @@ PY
       return 0
     fi
     if [ "${lsof_status}" -ne 0 ] && [ -z "${lsof_output}" ]; then
+      echo "WARN: lsof failed while scanning ${mount_point} (tool=python3, exit=${lsof_status}); skip mount-holder cleanup." >&2
       return 0
     fi
     holder_pids="$(printf '%s\n' "${lsof_output}" | awk 'NF' | sort -u)"
