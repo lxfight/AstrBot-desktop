@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 #[cfg(target_os = "windows")]
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::{
@@ -154,13 +154,6 @@ enum GracefulRestartOutcome {
     Completed,
     WaitFailed(String),
     RequestRejected,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum BackendReadiness {
-    NotReachable,
-    TcpOnly,
-    HttpReady,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -537,20 +530,28 @@ impl BackendState {
         // This uses blocking polling intentionally and is called from spawn_blocking
         // startup/restart workers, not directly on the UI thread.
         let timeout_ms = resolve_backend_timeout_ms(plan.packaged_mode);
+        let probe_timeout_ms = backend_ping_timeout_ms();
         let start_time = Instant::now();
         let ready_http_path = backend_ready_http_path();
         let mut tcp_ready_logged = false;
 
         loop {
-            match self.backend_readiness(backend_ping_timeout_ms(), ready_http_path) {
-                BackendReadiness::HttpReady => return Ok(()),
-                BackendReadiness::TcpOnly if !tcp_ready_logged => {
-                    append_desktop_log(
-                        "backend TCP port is reachable but HTTP dashboard is not ready yet; waiting",
-                    );
-                    tcp_ready_logged = true;
-                }
-                _ => {}
+            let http_status = self.request_backend_status_code(
+                "GET",
+                ready_http_path,
+                probe_timeout_ms,
+                None,
+                None,
+            );
+            if matches!(http_status, Some(status_code) if (200..400).contains(&status_code)) {
+                return Ok(());
+            }
+
+            if self.ping_backend(probe_timeout_ms) && !tcp_ready_logged {
+                append_desktop_log(
+                    "backend TCP port is reachable but HTTP dashboard is not ready yet; waiting",
+                );
+                tcp_ready_logged = true;
             }
 
             {
@@ -578,11 +579,15 @@ impl BackendState {
 
             if let Some(limit) = timeout_ms {
                 if start_time.elapsed() >= limit {
+                    let last_http_status_text = http_status
+                        .map(|status| status.to_string())
+                        .unwrap_or_else(|| "none".to_string());
                     append_desktop_log(&format!(
-                        "backend HTTP readiness check timed out after {}ms: path={}, tcp_reachable={}",
+                        "backend HTTP readiness check timed out after {}ms: path={}, tcp_reachable={}, last_http_status={}",
                         limit.as_millis(),
                         ready_http_path,
-                        tcp_ready_logged
+                        tcp_ready_logged,
+                        last_http_status_text
                     ));
                     return Err(format!(
                         "Timed out after {}ms waiting for backend startup.",
@@ -593,23 +598,6 @@ impl BackendState {
 
             thread::sleep(Duration::from_millis(BACKEND_READY_POLL_INTERVAL_MS));
         }
-    }
-
-    fn backend_readiness(&self, timeout_ms: u64, ready_http_path: &str) -> BackendReadiness {
-        if self.is_backend_http_ready(timeout_ms, ready_http_path) {
-            BackendReadiness::HttpReady
-        } else if self.ping_backend(timeout_ms) {
-            BackendReadiness::TcpOnly
-        } else {
-            BackendReadiness::NotReachable
-        }
-    }
-
-    fn is_backend_http_ready(&self, timeout_ms: u64, ready_http_path: &str) -> bool {
-        matches!(
-            self.request_backend_status_code("GET", ready_http_path, timeout_ms, None, None),
-            Some(status_code) if (200..400).contains(&status_code)
-        )
     }
 
     fn ping_backend(&self, timeout_ms: u64) -> bool {
@@ -2311,7 +2299,11 @@ fn backend_ready_http_path() -> &'static str {
                 } else if trimmed.starts_with('/') {
                     trimmed.to_string()
                 } else {
-                    format!("/{trimmed}")
+                    let normalized = format!("/{trimmed}");
+                    append_desktop_log(&format!(
+                        "{BACKEND_READY_HTTP_PATH_ENV} is missing leading '/': '{trimmed}', normalized to '{normalized}'"
+                    ));
+                    normalized
                 }
             }
             Err(_) => DEFAULT_BACKEND_READY_HTTP_PATH.to_string(),
@@ -2354,9 +2346,6 @@ fn default_packaged_root_dir() -> Option<PathBuf> {
     home::home_dir().map(|home| home.join(".astrbot"))
 }
 
-#[cfg(target_os = "windows")]
-type PathKey = Vec<u16>;
-#[cfg(not(target_os = "windows"))]
 type PathKey = OsString;
 
 fn path_key(path: &Path) -> Option<PathKey> {
@@ -2366,19 +2355,18 @@ fn path_key(path: &Path) -> Option<PathKey> {
     let normalized_path: PathBuf = path.components().collect();
     #[cfg(target_os = "windows")]
     {
-        Some(
-            normalized_path
-                .as_os_str()
-                .encode_wide()
-                .map(|unit| {
-                    if (b'A' as u16..=b'Z' as u16).contains(&unit) {
-                        unit + 32
-                    } else {
-                        unit
-                    }
-                })
-                .collect(),
-        )
+        let lowered_units: Vec<u16> = normalized_path
+            .as_os_str()
+            .encode_wide()
+            .map(|unit| {
+                if (b'A' as u16..=b'Z' as u16).contains(&unit) {
+                    unit + 32
+                } else {
+                    unit
+                }
+            })
+            .collect();
+        Some(OsString::from_wide(&lowered_units))
     }
     #[cfg(not(target_os = "windows"))]
     {
