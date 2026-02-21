@@ -226,27 +226,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          max_attempts=3
-          attempt=1
-          until cargo tauri build --verbose --target ${{ matrix.target }} --bundles app; do
-            if [ "${attempt}" -ge "${max_attempts}" ]; then
-              echo "macOS build failed after ${max_attempts} attempts." >&2
+          for attempt in 1 2 3; do
+            if cargo tauri build --verbose --target ${{ matrix.target }} --bundles app; then
+              break
+            fi
+
+            if [ "${attempt}" -eq 3 ]; then
+              echo "macOS build failed after 3 attempts." >&2
               exit 1
             fi
-            echo "macOS build failed on attempt ${attempt}/${max_attempts}, retrying in 8s..."
-            attempt=$((attempt + 1))
+
+            echo "macOS build failed on attempt ${attempt}/3, retrying in 8s..."
             sleep 8
           done
 
       - name: Package macOS app as zip
+        env:
+          ASTRBOT_MACOS_APP_BUNDLE_NAME: ${{ vars.ASTRBOT_MACOS_APP_BUNDLE_NAME || '' }}
         shell: bash
         run: |
           set -euo pipefail
-          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/AstrBot.app"
-          if [ ! -d "${app_path}" ]; then
-            echo "Expected app bundle not found: ${app_path}" >&2
-            ls -la "src-tauri/target/${{ matrix.target }}/release/bundle/macos" || true
+          bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
+          app_bundle_name="${ASTRBOT_MACOS_APP_BUNDLE_NAME}"
+          if [ -z "${app_bundle_name}" ]; then
+            app_bundle_name="$(python3 -c "import json,pathlib; d=json.loads(pathlib.Path('src-tauri/tauri.conf.json').read_text(encoding='utf-8')); print(str(d.get('productName','')).strip())")"
+          fi
+
+          if [ -z "${app_bundle_name}" ]; then
+            echo "Unable to resolve app bundle name from ASTRBOT_MACOS_APP_BUNDLE_NAME or src-tauri/tauri.conf.json productName." >&2
             exit 1
+          fi
+
+          app_path="${bundle_dir}/${app_bundle_name}.app"
+          if [ ! -d "${app_path}" ]; then
+            shopt -s nullglob
+            app_candidates=("${bundle_dir}"/*.app)
+            if [ "${#app_candidates[@]}" -eq 1 ]; then
+              app_path="${app_candidates[0]}"
+              echo "::warning::Expected ${bundle_dir}/${app_bundle_name}.app not found; fallback to discovered app bundle ${app_path}"
+            else
+              echo "Expected app bundle not found: ${app_path}" >&2
+              ls -la "${bundle_dir}" || true
+              exit 1
+            fi
           fi
 
           zip_dir="src-tauri/target/${{ matrix.target }}/release/bundle/zip"
