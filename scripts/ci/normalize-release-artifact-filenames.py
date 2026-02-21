@@ -9,6 +9,7 @@ import sys
 
 NIGHTLY_DATE_PATTERN = re.compile(r"(?:-|_)nightly[._-][0-9]{8}[._-][0-9a-fA-F]{7,40}")
 NIGHTLY_HASH_PATTERN = re.compile(r"(?:-|_)nightly[-_][0-9a-fA-F]{7,40}")
+HEX_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
 ARCH_ALIAS = {
     "x86_64": "amd64",
@@ -21,6 +22,12 @@ ARCH_ALIAS = {
 
 def normalize_arch(arch: str) -> str:
     return ARCH_ALIAS.get(arch, arch)
+
+
+def should_normalize_file(path: pathlib.Path) -> bool:
+    if path.suffix not in {".rpm", ".deb", ".exe", ".msi", ".zip"}:
+        return False
+    return path.stem.startswith("AstrBot_") or path.stem.startswith("AstrBot-")
 
 
 def canonicalize_stem(stem: str, ext: str) -> tuple[str, bool]:
@@ -119,15 +126,20 @@ def main() -> int:
     short_sha = source_git_ref[:8]
     nightly_suffix = f"_nightly_{short_sha}" if is_nightly else ""
 
-    if is_nightly and len(short_sha) < 7:
+    if is_nightly and not HEX_SHA_PATTERN.fullmatch(source_git_ref):
         raise RuntimeError(
-            "nightly build requires --source-git-ref commit-like value to derive short sha suffix"
+            "nightly build requires --source-git-ref to be a hex commit SHA (7-64 chars)"
         )
 
     unmatched_messages: list[str] = []
     renamed_count = 0
+    skipped_count = 0
 
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        if not should_normalize_file(path):
+            skipped_count += 1
+            continue
+
         stem = path.stem
         ext = path.suffix
 
@@ -163,7 +175,10 @@ def main() -> int:
         for message in unmatched_messages:
             print(f"::warning::{message}")
 
-    print(f"[normalize-artifacts] completed: renamed={renamed_count}, unmatched={len(unmatched_messages)}")
+    print(
+        f"[normalize-artifacts] completed: renamed={renamed_count}, "
+        f"unmatched={len(unmatched_messages)}, skipped_non_target={skipped_count}"
+    )
     return 0
 
 
