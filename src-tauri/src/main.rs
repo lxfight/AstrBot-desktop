@@ -430,7 +430,7 @@ impl BackendState {
             command.env("PATH", augmented_path);
             if !prepend_entries.is_empty()
                 && BACKEND_PATH_AUGMENT_LOGGED
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
                     .is_ok()
             {
                 let preview = prepend_entries
