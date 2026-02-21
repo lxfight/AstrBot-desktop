@@ -74,33 +74,33 @@ ARCH_ALIAS = {
     "aarch64": "arm64",
     "arm64": "arm64",
 }
-WARNED_UNKNOWN_ARCHES: set[str] = set()
 
 
-def normalize_arch(arch: str) -> str:
+def normalize_arch(arch: str, warned_unknown_arches: set[str]) -> str:
     normalized = ARCH_ALIAS.get(arch)
     if normalized is not None:
         return normalized
-    if arch not in WARNED_UNKNOWN_ARCHES:
-        WARNED_UNKNOWN_ARCHES.add(arch)
+    if arch not in warned_unknown_arches:
+        warned_unknown_arches.add(arch)
         print(
             f"::warning::[normalize-artifacts] unknown architecture alias '{arch}', keeping as-is"
         )
     return arch
 
 
-def resolve_nightly_source_sha(source_git_ref: str) -> tuple[str, bool]:
-    """Resolve a commit-like SHA from source_git_ref.
-
-    Returns (sha, normalized_from_path_component).
-    """
+def resolve_nightly_source_sha(source_git_ref: str) -> str:
+    """Resolve a commit-like SHA from source_git_ref."""
     candidate = source_git_ref.strip()
     if HEX_SHA_PATTERN.fullmatch(candidate):
-        return candidate, False
+        return candidate
 
     tail = candidate.rsplit("/", 1)[-1]
     if HEX_SHA_PATTERN.fullmatch(tail):
-        return tail, True
+        print(
+            "::warning::[normalize-artifacts] nightly source_git_ref was not a bare SHA; "
+            f"using trailing SHA component '{tail}'."
+        )
+        return tail
 
     raise RuntimeError(
         "nightly build requires --source-git-ref to be a hex commit SHA (8-64 chars), "
@@ -115,14 +115,21 @@ def should_normalize_file(path: pathlib.Path) -> bool:
     return path.stem.startswith("AstrBot_") or path.stem.startswith("AstrBot-")
 
 
-def canonicalize_stem(stem: str, ext: str) -> tuple[str, bool]:
+def strip_nightly_suffix(stem: str) -> str:
+    stem = NIGHTLY_DATE_PATTERN.sub("", stem)
+    return NIGHTLY_HASH_PATTERN.sub("", stem)
+
+
+def canonicalize_stem(
+    stem: str, ext: str, warned_unknown_arches: set[str]
+) -> tuple[str, bool]:
     for pattern, normalized_template in CANONICALIZE_RULES.get(ext, ()):
         match = pattern.fullmatch(stem)
         if not match:
             continue
         groups = match.groupdict()
         if "arch" in groups:
-            groups["arch"] = normalize_arch(groups["arch"])
+            groups["arch"] = normalize_arch(groups["arch"], warned_unknown_arches)
         return normalized_template.format(**groups), True
 
     return stem, False
@@ -164,45 +171,39 @@ def main() -> int:
     source_git_ref = args.source_git_ref.strip()
     is_nightly = build_mode == "nightly"
     resolved_source_sha = ""
-    normalized_sha_from_path_component = False
     if is_nightly:
-        resolved_source_sha, normalized_sha_from_path_component = resolve_nightly_source_sha(
-            source_git_ref
-        )
+        resolved_source_sha = resolve_nightly_source_sha(source_git_ref)
     short_sha = resolved_source_sha[:8]
     nightly_suffix = f"_nightly_{short_sha}" if is_nightly else ""
-
-    if normalized_sha_from_path_component:
-        print(
-            "::warning::[normalize-artifacts] nightly source_git_ref was not a bare SHA; "
-            f"using trailing SHA component '{resolved_source_sha}'."
-        )
 
     unmatched_messages: list[str] = []
     renamed_count = 0
     skipped_count = 0
+    warned_unknown_arches: set[str] = set()
 
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         if not should_normalize_file(path):
             skipped_count += 1
             continue
 
-        stem = path.stem
+        original_name = path.name
+        original_stem = path.stem
         ext = path.suffix.lower()
 
-        normalized_stem = NIGHTLY_DATE_PATTERN.sub("", stem)
-        normalized_stem = NIGHTLY_HASH_PATTERN.sub("", normalized_stem)
-        normalized_stem, matched = canonicalize_stem(normalized_stem, ext)
+        stripped_stem = strip_nightly_suffix(original_stem)
+        normalized_stem, matched = canonicalize_stem(stripped_stem, ext, warned_unknown_arches)
+
+        final_stem = normalized_stem
+        if nightly_suffix and not final_stem.endswith(nightly_suffix):
+            final_stem = f"{final_stem}{nightly_suffix}"
 
         if not matched:
             unmatched_messages.append(
-                f"[normalize-artifacts] unmatched naming pattern, kept stem: {path.name}"
+                f"[normalize-artifacts] unmatched naming pattern: original={original_name}, "
+                f"normalized={final_stem}{ext}"
             )
 
-        if nightly_suffix and not normalized_stem.endswith(nightly_suffix):
-            normalized_stem = f"{normalized_stem}{nightly_suffix}"
-
-        new_path = path.with_name(f"{normalized_stem}{ext}")
+        new_path = path.with_name(f"{final_stem}{ext}")
         if new_path == path:
             continue
         if new_path.exists():
