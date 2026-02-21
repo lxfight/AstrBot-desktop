@@ -141,6 +141,10 @@ select_canonicalize_tool() {
 select_canonicalize_tool
 
 select_lsof_timeout_tool() {
+  if command -v python3 >/dev/null 2>&1; then
+    lsof_timeout_tool="python3"
+    return
+  fi
   if command -v gtimeout >/dev/null 2>&1; then
     lsof_timeout_tool="gtimeout"
     return
@@ -149,14 +153,28 @@ select_lsof_timeout_tool() {
     lsof_timeout_tool="timeout"
     return
   fi
-  if command -v python3 >/dev/null 2>&1; then
-    lsof_timeout_tool="python3"
-    return
-  fi
   lsof_timeout_tool=""
 }
 
 select_lsof_timeout_tool
+
+resolve_disk_identifier() {
+  local target="$1"
+  if [[ "${target}" =~ ^/dev/disk[0-9]+$ ]]; then
+    printf '%s\n' "${target}"
+    return 0
+  fi
+  if ! command -v diskutil >/dev/null 2>&1; then
+    return 0
+  fi
+  local disk_name=""
+  disk_name="$(
+    diskutil info "${target}" 2>/dev/null | awk -F': *' '/Part of Whole/ {print $2; exit}'
+  )"
+  if [[ "${disk_name}" =~ ^disk[0-9]+$ ]]; then
+    printf '/dev/%s\n' "${disk_name}"
+  fi
+}
 
 detach_target() {
   local target="$1"
@@ -170,7 +188,11 @@ detach_target() {
       return 0
     fi
     if command -v diskutil >/dev/null 2>&1; then
-      diskutil unmountDisk force "${target}" >/dev/null 2>&1 || true
+      local disk_target=""
+      disk_target="$(resolve_disk_identifier "${target}")"
+      if [[ "${disk_target}" =~ ^/dev/disk[0-9]+$ ]]; then
+        diskutil unmountDisk force "${disk_target}" >/dev/null 2>&1 || true
+      fi
       diskutil unmount force "${target}" >/dev/null 2>&1 || true
     fi
     hdiutil detach -force "${target}" >/dev/null 2>&1 || true
@@ -324,9 +346,20 @@ kill_mount_holders() {
   if [ "${lsof_timeout_tool}" = "gtimeout" ] || [ "${lsof_timeout_tool}" = "timeout" ]; then
     local lsof_output=""
     local lsof_status=0
+    local started_at=0
+    local ended_at=0
+    local elapsed=0
+    started_at="$(date +%s 2>/dev/null || echo 0)"
     lsof_output="$("${lsof_timeout_tool}" "${lsof_timeout_seconds}" lsof -t +D "${mount_point}" 2>/dev/null)" || lsof_status=$?
-    if [ "${lsof_status}" -eq 124 ] || [ "${lsof_status}" -eq 137 ]; then
+    ended_at="$(date +%s 2>/dev/null || echo 0)"
+    if [ "${started_at}" -gt 0 ] && [ "${ended_at}" -ge "${started_at}" ]; then
+      elapsed=$((ended_at - started_at))
+    fi
+    if [ "${lsof_status}" -ne 0 ] && [ "${elapsed}" -ge "${lsof_timeout_seconds}" ]; then
       echo "WARN: lsof timed out while scanning ${mount_point}; skip mount-holder cleanup." >&2
+      return 0
+    fi
+    if [ "${lsof_status}" -ne 0 ] && [ -z "${lsof_output}" ]; then
       return 0
     fi
     holder_pids="$(printf '%s\n' "${lsof_output}" | awk 'NF' | sort -u)"
@@ -358,8 +391,11 @@ if proc.stdout:
 sys.exit(proc.returncode)
 PY
     )" || lsof_status=$?
-    if [ "${lsof_status}" -eq 124 ] || [ "${lsof_status}" -eq 137 ]; then
+    if [ "${lsof_status}" -eq 124 ]; then
       echo "WARN: lsof timed out while scanning ${mount_point}; skip mount-holder cleanup." >&2
+      return 0
+    fi
+    if [ "${lsof_status}" -ne 0 ] && [ -z "${lsof_output}" ]; then
       return 0
     fi
     holder_pids="$(printf '%s\n' "${lsof_output}" | awk 'NF' | sort -u)"
