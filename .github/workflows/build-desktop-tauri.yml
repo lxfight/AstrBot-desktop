@@ -16,6 +16,15 @@ on:
         required: false
         type: boolean
         default: true
+      build_mode:
+        description: Build mode (`auto` | `tag-poll` | `nightly`); for workflow_dispatch, `auto` behaves as `manual` and disables publish_release
+        required: false
+        type: choice
+        default: auto
+        options:
+          - auto
+          - tag-poll
+          - nightly
   schedule:
     - cron: '0 * * * *'
 
@@ -25,6 +34,8 @@ permissions:
 env:
   ASTRBOT_SOURCE_GIT_URL: ${{ vars.ASTRBOT_SOURCE_GIT_URL || 'https://github.com/AstrBotDevs/AstrBot.git' }}
   ASTRBOT_SOURCE_GIT_REF: ${{ vars.ASTRBOT_SOURCE_GIT_REF || 'master' }}
+  ASTRBOT_NIGHTLY_SOURCE_GIT_REF: ${{ vars.ASTRBOT_NIGHTLY_SOURCE_GIT_REF || 'master' }}
+  ASTRBOT_NIGHTLY_UTC_HOUR: ${{ vars.ASTRBOT_NIGHTLY_UTC_HOUR || '3' }}
 
 jobs:
   resolve_build_context:
@@ -35,6 +46,11 @@ jobs:
       source_git_ref: ${{ steps.resolve.outputs.source_git_ref }}
       astrbot_version: ${{ steps.resolve.outputs.astrbot_version }}
       should_build: ${{ steps.resolve.outputs.should_build }}
+      build_mode: ${{ steps.resolve.outputs.build_mode }}
+      publish_release: ${{ steps.resolve.outputs.publish_release }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      release_prerelease: ${{ steps.resolve.outputs.release_prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -52,85 +68,20 @@ jobs:
           ASTRBOT_SOURCE_GIT_REF: ${{ env.ASTRBOT_SOURCE_GIT_REF }}
           WORKFLOW_SOURCE_GIT_URL: ${{ github.event.inputs.source_git_url }}
           WORKFLOW_SOURCE_GIT_REF: ${{ github.event.inputs.source_git_ref }}
+          WORKFLOW_PUBLISH_RELEASE: ${{ github.event.inputs.publish_release }}
+          WORKFLOW_BUILD_MODE: ${{ github.event.inputs.build_mode }}
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
+          ASTRBOT_NIGHTLY_SOURCE_GIT_REF: ${{ env.ASTRBOT_NIGHTLY_SOURCE_GIT_REF }}
+          ASTRBOT_NIGHTLY_UTC_HOUR: ${{ env.ASTRBOT_NIGHTLY_UTC_HOUR }}
+        run: bash scripts/ci/resolve-build-context.sh
 
-          source_git_url="${ASTRBOT_SOURCE_GIT_URL}"
-          source_git_ref="${ASTRBOT_SOURCE_GIT_REF}"
-          should_build="true"
-
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            if [ -n "${WORKFLOW_SOURCE_GIT_URL:-}" ]; then
-              source_git_url="${WORKFLOW_SOURCE_GIT_URL}"
-            fi
-            if [ -n "${WORKFLOW_SOURCE_GIT_REF:-}" ]; then
-              source_git_ref="${WORKFLOW_SOURCE_GIT_REF}"
-            fi
-          fi
-
-          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
-            latest_tag="$(git ls-remote --tags --refs "${source_git_url}" \
-              | awk '{print $2}' \
-              | sed 's#refs/tags/##' \
-              | sort -V \
-              | tail -n 1)"
-            if [ -z "${latest_tag}" ]; then
-              echo "Unable to resolve latest tag from ${source_git_url}" >&2
-              exit 1
-            fi
-            source_git_ref="${latest_tag}"
-            echo "Scheduled run detected latest upstream tag: ${source_git_ref}"
-
-            http_status="$(curl -sS -o /dev/null -w '%{http_code}' \
-              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GH_REPOSITORY}/releases/tags/${source_git_ref}")"
-            if [ "${http_status}" = "200" ]; then
-              should_build="false"
-              echo "Release ${source_git_ref} already exists. Tag unchanged, skipping build."
-            else
-              echo "Release ${source_git_ref} not found (HTTP ${http_status}). Build will run."
-            fi
-          fi
-
-          version=""
-          if [ "${should_build}" = "true" ]; then
-            if printf '%s' "${source_git_ref}" | grep -Eq '^v[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$'; then
-              version="${source_git_ref#v}"
-              echo "Resolved version directly from source tag: ${source_git_ref}"
-            else
-              workdir="$(mktemp -d)"
-              repo_dir="${workdir}/AstrBot"
-              git init "${repo_dir}"
-              git -C "${repo_dir}" remote add origin "${source_git_url}"
-              git -C "${repo_dir}" fetch --depth 1 origin "${source_git_ref}"
-              git -C "${repo_dir}" checkout --detach FETCH_HEAD
-              version="$(python3 scripts/ci/read-project-version.py "${repo_dir}/pyproject.toml")"
-            fi
-          else
-            version="${source_git_ref#v}"
-            if [ -z "${version}" ] || [ "${version}" = "${source_git_ref}" ]; then
-              version="unknown"
-            fi
-          fi
-
-          {
-            echo "source_git_url=${source_git_url}"
-            echo "source_git_ref=${source_git_ref}"
-            echo "astrbot_version=${version}"
-            echo "should_build=${should_build}"
-          } >> "${GITHUB_OUTPUT}"
-          echo "Resolved source: ${source_git_url}@${source_git_ref}"
-          echo "Resolved AstrBot version: ${version}"
-          echo "Build enabled: ${should_build}"
 
   sync_repo_version:
     name: Sync Repository Version
     needs: resolve_build_context
-    if: ${{ needs.resolve_build_context.outputs.should_build == 'true' && github.event_name == 'schedule' }}
+    if: ${{ github.event_name == 'schedule' && needs.resolve_build_context.outputs.should_build == 'true' && needs.resolve_build_context.outputs.build_mode == 'tag-poll' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -456,7 +407,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: ${{ needs.resolve_build_context.outputs.should_build == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')) }}
+    if: ${{ needs.resolve_build_context.outputs.should_build == 'true' && needs.resolve_build_context.outputs.publish_release == 'true' }}
     needs:
       - resolve_build_context
       - build-linux
@@ -488,13 +439,16 @@ jobs:
       - name: Create or update release
         uses: softprops/action-gh-release@v2.5.0
         with:
-          tag_name: v${{ needs.resolve_build_context.outputs.astrbot_version }}
-          name: AstrBot Desktop v${{ needs.resolve_build_context.outputs.astrbot_version }}
+          tag_name: ${{ needs.resolve_build_context.outputs.release_tag }}
+          name: ${{ needs.resolve_build_context.outputs.release_name }}
           body: |
             Automated desktop package release.
             - Source: `${{ needs.resolve_build_context.outputs.source_git_url }}`
             - Ref: `${{ needs.resolve_build_context.outputs.source_git_ref }}`
+            - Mode: `${{ needs.resolve_build_context.outputs.build_mode }}`
             - Windows tip: prefer `nsis-web` installer for smaller downloads and faster install startup.
           generate_release_notes: true
+          prerelease: ${{ needs.resolve_build_context.outputs.release_prerelease == 'true' }}
+          make_latest: ${{ needs.resolve_build_context.outputs.release_prerelease != 'true' }}
           files: release-artifacts/**/*
           fail_on_unmatched_files: true
