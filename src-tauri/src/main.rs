@@ -69,7 +69,7 @@ static BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 static BRIDGE_BACKEND_PING_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 static DESKTOP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static TRAY_RESTART_SIGNAL_TOKEN: AtomicU64 = AtomicU64::new(0);
-static BACKEND_PATH_OVERRIDE: OnceLock<Option<OsString>> = OnceLock::new();
+static BACKEND_PATH_PREPEND_ENTRIES: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 struct ShellTexts {
@@ -427,10 +427,7 @@ impl BackendState {
                 "PYTHONIOENCODING",
                 env::var("PYTHONIOENCODING").unwrap_or_else(|_| "utf-8".to_string()),
             );
-        if let Some(path_override) = BACKEND_PATH_OVERRIDE
-            .get_or_init(build_backend_path_override)
-            .as_ref()
-        {
+        if let Some(path_override) = cached_backend_path_override() {
             command.env("PATH", path_override);
         }
         #[cfg(target_os = "windows")]
@@ -2319,15 +2316,18 @@ fn add_path_candidate(
     if candidate.as_os_str().is_empty() {
         return;
     }
-    let is_dir = candidate
-        .metadata()
-        .map(|meta| meta.is_dir())
-        .unwrap_or(false);
-    if !is_dir {
+    if !is_existing_dir(&candidate) {
         return;
     }
     if seen_keys.insert(path_dedup_key(&candidate)) {
         prepend_entries.push(candidate);
+    }
+}
+
+fn is_existing_dir(path: &Path) -> bool {
+    match path.canonicalize() {
+        Ok(canonical) => canonical.is_dir(),
+        Err(_) => path.is_dir(),
     }
 }
 
@@ -2346,7 +2346,26 @@ fn log_backend_path_augmentation(prepend_entries: &[PathBuf]) {
     ));
 }
 
-fn build_backend_path_override() -> Option<OsString> {
+fn cached_backend_path_override() -> Option<OsString> {
+    let prepend_entries =
+        BACKEND_PATH_PREPEND_ENTRIES.get_or_init(build_backend_path_prepend_entries);
+    if prepend_entries.is_empty() {
+        return None;
+    }
+
+    let existing_path = env::var_os("PATH").unwrap_or_default();
+    let existing_entries: Vec<PathBuf> = env::split_paths(&existing_path).collect();
+
+    match env::join_paths(prepend_entries.iter().chain(existing_entries.iter())) {
+        Ok(path_override) => Some(path_override),
+        Err(error) => {
+            append_desktop_log(&format!("failed to build backend PATH override: {error}"));
+            None
+        }
+    }
+}
+
+fn build_backend_path_prepend_entries() -> Vec<PathBuf> {
     let existing_path = env::var_os("PATH").unwrap_or_default();
     let existing_entries: Vec<PathBuf> = env::split_paths(&existing_path).collect();
     let mut seen_keys: HashSet<PathDedupKey> = existing_entries
@@ -2426,20 +2445,8 @@ fn build_backend_path_override() -> Option<OsString> {
         }
     }
 
-    if prepend_entries.is_empty() {
-        return None;
-    }
-
-    match env::join_paths(prepend_entries.iter().chain(existing_entries.iter())) {
-        Ok(path) => {
-            log_backend_path_augmentation(&prepend_entries);
-            Some(path)
-        }
-        Err(error) => {
-            append_desktop_log(&format!("failed to build augmented backend PATH: {error}"));
-            None
-        }
-    }
+    log_backend_path_augmentation(&prepend_entries);
+    prepend_entries
 }
 
 fn packaged_fallback_webui_probe_dir(root_dir: Option<&Path>) -> Option<PathBuf> {
