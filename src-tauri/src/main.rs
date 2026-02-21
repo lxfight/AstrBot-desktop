@@ -35,6 +35,16 @@ const GRACEFUL_RESTART_REQUEST_TIMEOUT_MS: u64 = 2_500;
 const GRACEFUL_RESTART_START_TIME_TIMEOUT_MS: u64 = 1_800;
 const GRACEFUL_RESTART_POLL_INTERVAL_MS: u64 = 350;
 const GRACEFUL_STOP_TIMEOUT_MS: u64 = 10_000;
+const DEFAULT_BACKEND_READY_POLL_INTERVAL_MS: u64 = 300;
+const BACKEND_READY_POLL_INTERVAL_MIN_MS: u64 = 50;
+const BACKEND_READY_POLL_INTERVAL_MAX_MS: u64 = 10_000;
+const BACKEND_READY_POLL_INTERVAL_ENV: &str = "ASTRBOT_BACKEND_READY_POLL_INTERVAL_MS";
+const DEFAULT_BACKEND_READY_HTTP_PATH: &str = "/";
+const BACKEND_READY_HTTP_PATH_ENV: &str = "ASTRBOT_BACKEND_READY_HTTP_PATH";
+const BACKEND_READY_PROBE_TIMEOUT_ENV: &str = "ASTRBOT_BACKEND_READY_PROBE_TIMEOUT_MS";
+const BACKEND_READY_PROBE_TIMEOUT_MIN_MS: u64 = 100;
+const BACKEND_READY_PROBE_TIMEOUT_MAX_MS: u64 = 30_000;
+const BACKEND_READY_TCP_PROBE_TIMEOUT_MAX_MS: u64 = 1_000;
 const FORCE_STOP_WAIT_MIN_MS: u64 = 200;
 #[cfg(target_os = "windows")]
 const WINDOWS_GRACEFUL_STOP_NONZERO_WAIT_MS: u64 = 350;
@@ -43,6 +53,8 @@ const FORCE_STOP_WAIT_MAX_WINDOWS_MS: u64 = 2_200;
 #[cfg(not(target_os = "windows"))]
 const FORCE_STOP_WAIT_MAX_NON_WINDOWS_MS: u64 = 1_500;
 const DEFAULT_BACKEND_PING_TIMEOUT_MS: u64 = 800;
+const BACKEND_PING_TIMEOUT_MIN_MS: u64 = 50;
+const BACKEND_PING_TIMEOUT_MAX_MS: u64 = 30_000;
 const BACKEND_PING_TIMEOUT_ENV: &str = "ASTRBOT_BACKEND_PING_TIMEOUT_MS";
 const BRIDGE_BACKEND_PING_TIMEOUT_ENV: &str = "ASTRBOT_BRIDGE_BACKEND_PING_TIMEOUT_MS";
 const DESKTOP_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
@@ -153,6 +165,13 @@ enum GracefulRestartOutcome {
 #[derive(Debug, Clone, Copy)]
 struct TrayOriginDecision {
     uses_backend_origin: bool,
+}
+
+#[derive(Debug, Clone)]
+struct BackendReadinessConfig {
+    path: String,
+    probe_timeout_ms: u64,
+    poll_interval_ms: u64,
 }
 
 struct AtomicFlagGuard<'a> {
@@ -521,12 +540,29 @@ impl BackendState {
     }
 
     fn wait_for_backend(&self, plan: &LaunchPlan) -> Result<(), String> {
+        // This uses blocking polling intentionally and is called from spawn_blocking
+        // startup/restart workers, not directly on the UI thread.
         let timeout_ms = resolve_backend_timeout_ms(plan.packaged_mode);
+        let readiness = backend_readiness_config();
         let start_time = Instant::now();
+        let mut tcp_ready_logged = false;
+        let mut ever_tcp_reachable = false;
 
         loop {
-            if self.ping_backend(backend_ping_timeout_ms()) {
+            let (http_status, tcp_reachable) =
+                self.probe_backend_readiness(&readiness.path, readiness.probe_timeout_ms);
+            if matches!(http_status, Some(status_code) if (200..400).contains(&status_code)) {
                 return Ok(());
+            }
+
+            if tcp_reachable {
+                ever_tcp_reachable = true;
+                if !tcp_ready_logged {
+                    append_desktop_log(
+                        "backend TCP port is reachable but HTTP dashboard is not ready yet; waiting",
+                    );
+                    tcp_ready_logged = true;
+                }
             }
 
             {
@@ -554,6 +590,13 @@ impl BackendState {
 
             if let Some(limit) = timeout_ms {
                 if start_time.elapsed() >= limit {
+                    self.log_backend_readiness_timeout(
+                        limit,
+                        &readiness.path,
+                        readiness.probe_timeout_ms,
+                        http_status,
+                        ever_tcp_reachable,
+                    );
                     return Err(format!(
                         "Timed out after {}ms waiting for backend startup.",
                         limit.as_millis()
@@ -561,8 +604,42 @@ impl BackendState {
                 }
             }
 
-            thread::sleep(Duration::from_millis(600));
+            thread::sleep(Duration::from_millis(readiness.poll_interval_ms));
         }
+    }
+
+    fn probe_backend_readiness(
+        &self,
+        ready_http_path: &str,
+        probe_timeout_ms: u64,
+    ) -> (Option<u16>, bool) {
+        let http_status =
+            self.request_backend_status_code("GET", ready_http_path, probe_timeout_ms, None, None);
+        let tcp_timeout_ms = probe_timeout_ms.min(BACKEND_READY_TCP_PROBE_TIMEOUT_MAX_MS);
+        let tcp_reachable = self.ping_backend(tcp_timeout_ms);
+        (http_status, tcp_reachable)
+    }
+
+    fn log_backend_readiness_timeout(
+        &self,
+        timeout: Duration,
+        ready_http_path: &str,
+        probe_timeout_ms: u64,
+        last_http_status: Option<u16>,
+        tcp_reachable: bool,
+    ) {
+        let last_http_status_text = last_http_status
+            .map(|status| status.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        append_desktop_log(&format!(
+            "backend HTTP readiness check timed out after {}ms: backend_url={}, path={}, probe_timeout_ms={}, tcp_reachable={}, last_http_status={}",
+            timeout.as_millis(),
+            self.backend_url,
+            ready_http_path,
+            probe_timeout_ms,
+            tcp_reachable,
+            last_http_status_text
+        ));
     }
 
     fn ping_backend(&self, timeout_ms: u64) -> bool {
@@ -2254,6 +2331,71 @@ fn normalize_backend_url(raw: &str) -> String {
     }
 }
 
+fn resolve_backend_ready_http_path() -> String {
+    match env::var_os(BACKEND_READY_HTTP_PATH_ENV) {
+        Some(raw) => match raw.to_str() {
+            Some(raw_utf8) => {
+                let trimmed = raw_utf8.trim();
+                if trimmed.is_empty() {
+                    append_desktop_log(&format!(
+                        "{BACKEND_READY_HTTP_PATH_ENV} is empty/whitespace, fallback to default '{}'",
+                        DEFAULT_BACKEND_READY_HTTP_PATH
+                    ));
+                    DEFAULT_BACKEND_READY_HTTP_PATH.to_string()
+                } else if trimmed.starts_with('/') {
+                    trimmed.to_string()
+                } else {
+                    let normalized = format!("/{trimmed}");
+                    append_desktop_log(&format!(
+                        "{BACKEND_READY_HTTP_PATH_ENV} is missing leading '/': '{trimmed}', normalized to '{normalized}'"
+                    ));
+                    normalized
+                }
+            }
+            None => {
+                append_desktop_log(&format!(
+                    "{BACKEND_READY_HTTP_PATH_ENV} contains non-UTF-8 value '{}', fallback to default '{}'",
+                    raw.to_string_lossy(),
+                    DEFAULT_BACKEND_READY_HTTP_PATH
+                ));
+                DEFAULT_BACKEND_READY_HTTP_PATH.to_string()
+            }
+        },
+        None => DEFAULT_BACKEND_READY_HTTP_PATH.to_string(),
+    }
+}
+
+fn backend_readiness_config() -> BackendReadinessConfig {
+    let probe_timeout_fallback = backend_ping_timeout_ms();
+    let probe_timeout_ms = match env::var(BACKEND_READY_PROBE_TIMEOUT_ENV) {
+        Ok(raw) => parse_clamped_timeout_env(
+            &raw,
+            BACKEND_READY_PROBE_TIMEOUT_ENV,
+            probe_timeout_fallback,
+            BACKEND_READY_PROBE_TIMEOUT_MIN_MS,
+            BACKEND_READY_PROBE_TIMEOUT_MAX_MS,
+        ),
+        Err(_) => probe_timeout_fallback,
+    };
+    let poll_interval_fallback = DEFAULT_BACKEND_READY_POLL_INTERVAL_MS;
+    let poll_interval_ms = match env::var(BACKEND_READY_POLL_INTERVAL_ENV) {
+        Ok(raw) => parse_clamped_timeout_env(
+            &raw,
+            BACKEND_READY_POLL_INTERVAL_ENV,
+            poll_interval_fallback,
+            BACKEND_READY_POLL_INTERVAL_MIN_MS,
+            BACKEND_READY_POLL_INTERVAL_MAX_MS,
+        ),
+        Err(_) => poll_interval_fallback,
+    };
+
+    BackendReadinessConfig {
+        path: resolve_backend_ready_http_path(),
+        probe_timeout_ms,
+        poll_interval_ms,
+    }
+}
+
 fn workspace_root_dir() -> PathBuf {
     let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -2289,17 +2431,23 @@ fn default_packaged_root_dir() -> Option<PathBuf> {
     home::home_dir().map(|home| home.join(".astrbot"))
 }
 
+// Path keys are intentionally component-normalized, so entries like `/a/../b`
+// and `/b` deduplicate to the same key.
+// On Windows we apply ASCII case folding as a best-effort for case-insensitive PATHs.
 fn path_key(path: &Path) -> Option<OsString> {
     if path.as_os_str().is_empty() {
         return None;
     }
+    let normalized: PathBuf = path.components().collect();
     #[cfg(target_os = "windows")]
     {
-        Some(OsString::from(path.to_string_lossy().to_ascii_lowercase()))
+        Some(OsString::from(
+            normalized.to_string_lossy().to_ascii_lowercase(),
+        ))
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Some(path.as_os_str().to_os_string())
+        Some(normalized.into_os_string())
     }
 }
 
@@ -2408,10 +2556,11 @@ fn build_backend_path_override() -> Option<OsString> {
         return None;
     }
 
-    log_backend_path_augmentation(&prepend_entries);
-
     match env::join_paths(prepend_entries.iter().chain(existing_entries.iter())) {
-        Ok(path_override) => Some(path_override),
+        Ok(path_override) => {
+            log_backend_path_augmentation(&prepend_entries);
+            Some(path_override)
+        }
         Err(error) => {
             append_desktop_log(&format!("failed to build backend PATH override: {error}"));
             None
@@ -2825,9 +2974,31 @@ fn resolve_resource_path(app: &AppHandle, relative_path: &str) -> Option<PathBuf
     None
 }
 
-fn parse_ping_timeout_env(raw: &str, env_name: &str, fallback_ms: u64) -> u64 {
-    match raw.trim().parse::<u64>() {
-        Ok(timeout_ms) if timeout_ms > 0 => timeout_ms,
+fn parse_clamped_timeout_env(
+    raw: &str,
+    env_name: &str,
+    fallback_ms: u64,
+    min_ms: u64,
+    max_ms: u64,
+) -> u64 {
+    match raw.trim().parse::<u128>() {
+        Ok(parsed) if parsed > 0 => {
+            if parsed < min_ms as u128 {
+                append_desktop_log(&format!(
+                    "{}='{}' is below minimum {}ms, clamped to {}ms",
+                    env_name, raw, min_ms, min_ms
+                ));
+                min_ms
+            } else if parsed > max_ms as u128 {
+                append_desktop_log(&format!(
+                    "{}='{}' is above maximum {}ms, clamped to {}ms",
+                    env_name, raw, max_ms, max_ms
+                ));
+                max_ms
+            } else {
+                parsed as u64
+            }
+        }
         _ => {
             append_desktop_log(&format!(
                 "invalid {}='{}', fallback to {}ms",
@@ -2836,6 +3007,16 @@ fn parse_ping_timeout_env(raw: &str, env_name: &str, fallback_ms: u64) -> u64 {
             fallback_ms
         }
     }
+}
+
+fn parse_ping_timeout_env(raw: &str, env_name: &str, fallback_ms: u64) -> u64 {
+    parse_clamped_timeout_env(
+        raw,
+        env_name,
+        fallback_ms,
+        BACKEND_PING_TIMEOUT_MIN_MS,
+        BACKEND_PING_TIMEOUT_MAX_MS,
+    )
 }
 
 fn backend_ping_timeout_ms() -> u64 {
