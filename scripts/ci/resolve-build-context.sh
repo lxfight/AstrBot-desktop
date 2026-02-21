@@ -300,11 +300,12 @@ else
 fi
 
 if [ "${build_mode}" = "nightly" ] && [ "${should_build}" = "true" ]; then
+  base_version="${version}"
   nightly_date="$(date -u +%Y%m%d)"
   short_sha="$(printf '%s' "${source_git_ref}" | cut -c1-8)"
   version="${version}-nightly.${nightly_date}.${short_sha}"
   release_tag="v${version}"
-  release_name="AstrBot Desktop v${version}"
+  release_name="AstrBot Desktop v${base_version}-nightly-${short_sha}"
   release_prerelease="true"
 elif [ "${publish_release}" = "true" ] && [ "${should_build}" = "true" ]; then
   release_tag="v${version}"

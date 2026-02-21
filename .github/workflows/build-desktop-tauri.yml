@@ -421,6 +421,41 @@ jobs:
       - name: Show artifacts
         run: find release-artifacts -type f | sort
 
+      - name: Normalize nightly artifact filenames
+        if: ${{ needs.resolve_build_context.outputs.build_mode == 'nightly' }}
+        env:
+          SOURCE_GIT_REF: ${{ needs.resolve_build_context.outputs.source_git_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="$(printf '%s' "${SOURCE_GIT_REF}" | cut -c1-8)"
+          suffix="-nightly-${short_sha}"
+          python3 - "${suffix}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          suffix = sys.argv[1]
+          root = pathlib.Path("release-artifacts")
+          nightly_date_pattern = re.compile(r"-nightly\.[0-9]{8}\.[0-9a-fA-F]{7,40}")
+          nightly_hash_pattern = re.compile(r"-nightly-[0-9a-fA-F]{7,40}")
+
+          for path in sorted(p for p in root.rglob("*") if p.is_file()):
+              stem = path.stem
+              ext = path.suffix
+              normalized_stem = nightly_date_pattern.sub("", stem)
+              normalized_stem = nightly_hash_pattern.sub("", normalized_stem)
+              if not normalized_stem.endswith(suffix):
+                  normalized_stem = f"{normalized_stem}{suffix}"
+              new_path = path.with_name(f"{normalized_stem}{ext}")
+              if new_path == path:
+                  continue
+              if new_path.exists():
+                  raise RuntimeError(f"target already exists: {new_path}")
+              path.rename(new_path)
+              print(f"renamed: {path.name} -> {new_path.name}")
+          PY
+
       - name: Validate artifact filename uniqueness
         shell: bash
         run: |
