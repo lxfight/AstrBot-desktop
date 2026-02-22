@@ -42,15 +42,27 @@ if [ -z "${release_id}" ]; then
 fi
 
 deleted_count=0
+assets_list_err="$(mktemp)"
+assets_list_output="$(mktemp)"
+if gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
+  --jq 'if type == "array" then .[] else empty end | [.id, .name] | @tsv' \
+  >"${assets_list_output}" 2>"${assets_list_err}"; then
+  :
+else
+  echo "Failed to list assets for release ${RELEASE_TAG} (id=${release_id}) from ${GITHUB_REPOSITORY}:" >&2
+  cat "${assets_list_err}" >&2
+  rm -f "${assets_list_err}" "${assets_list_output}"
+  exit 1
+fi
+rm -f "${assets_list_err}"
+
 while IFS=$'\t' read -r asset_id asset_name; do
   [ -n "${asset_id}" ] || continue
   gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >/dev/null
   echo "Deleted existing release asset: id=${asset_id}, name=${asset_name}"
   deleted_count=$((deleted_count + 1))
-done < <(
-  gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
-    --jq 'if type == "array" then .[] else empty end | [.id, .name] | @tsv'
-)
+done < "${assets_list_output}"
+rm -f "${assets_list_output}"
 
 if [ "${deleted_count}" -eq 0 ]; then
   echo "Release ${RELEASE_TAG} has no existing assets."

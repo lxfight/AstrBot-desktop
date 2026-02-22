@@ -24,7 +24,17 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "node is required to read the version from package.json" >&2
+  exit 1
+fi
+
 pkg_version="$(node -e "console.log(require('./package.json').version)")"
+if [ -z "${pkg_version}" ]; then
+  echo "Failed to read the version from package.json (pkg_version is empty)" >&2
+  exit 1
+fi
+
 tauri_and_cargo_versions="$(
   python3 - <<'PY'
 import json
