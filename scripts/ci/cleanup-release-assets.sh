@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+if ! command -v gh >/dev/null 2>&1; then
+  echo "gh CLI is required to clean release assets, but was not found in PATH." >&2
+  exit 1
+fi
+
 if [ -z "${RELEASE_TAG:-}" ]; then
   echo "RELEASE_TAG is required." >&2
   exit 1

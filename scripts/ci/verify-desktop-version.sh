@@ -19,11 +19,55 @@ if [ -z "${expected}" ]; then
   exit 1
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to parse tauri.conf.json and Cargo.toml" >&2
+  exit 1
+fi
+
 pkg_version="$(node -e "console.log(require('./package.json').version)")"
-tauri_version="$(node -e "console.log(require('./src-tauri/tauri.conf.json').version)")"
-cargo_version="$(
-  node -e "const fs=require('fs');const content=fs.readFileSync('src-tauri/Cargo.toml','utf8');const match=content.match(/\\[package\\][\\s\\S]*?\\nversion\\s*=\\s*\\\"([^\\\"]+)\\\"/m);console.log(match?match[1]:'');"
+tauri_and_cargo_versions="$(
+  python3 - <<'PY'
+import json
+import pathlib
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    print("python3 tomllib module is required (Python 3.11+).", file=sys.stderr)
+    raise SystemExit(1)
+
+root = pathlib.Path(".")
+tauri_conf_path = root / "src-tauri" / "tauri.conf.json"
+cargo_toml_path = root / "src-tauri" / "Cargo.toml"
+
+try:
+    tauri_conf = json.loads(tauri_conf_path.read_text(encoding="utf-8"))
+except Exception as error:
+    print(f"Failed to parse {tauri_conf_path}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    cargo_manifest = tomllib.loads(cargo_toml_path.read_text(encoding="utf-8"))
+except Exception as error:
+    print(f"Failed to parse {cargo_toml_path}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+tauri_version = tauri_conf.get("version", "")
+if not isinstance(tauri_version, str):
+    tauri_version = ""
+
+package_section = cargo_manifest.get("package", {})
+if not isinstance(package_section, dict):
+    package_section = {}
+cargo_version = package_section.get("version", "")
+if not isinstance(cargo_version, str):
+    cargo_version = ""
+
+print(f"{tauri_version}\t{cargo_version}")
+PY
 )"
+IFS=$'\t' read -r tauri_version cargo_version <<< "${tauri_and_cargo_versions}"
 
 if [ -z "${cargo_version}" ]; then
   echo "Failed to resolve package.version from src-tauri/Cargo.toml" >&2
