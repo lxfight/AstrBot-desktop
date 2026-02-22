@@ -22,9 +22,17 @@ AstrBot 桌面应用（Tauri）。
 
 ## 一键安装（推荐）
 
-如果你只想使用软件，不需要本地构建，请直接从 Releases 下载对应系统的安装包：
+如果你只想使用软件，不需要本地构建，请直接从 [`Releases`](https://github.com/AstrBotDevs/AstrBot-desktop/releases/latest) 下载对应系统的安装包。
 
-[`Releases`](https://github.com/AstrBotDevs/AstrBot-desktop/releases/latest)
+版本说明：
+
+- [正式版](https://github.com/AstrBotDevs/AstrBot-desktop/releases/latest)：适合大多数用户日常使用。
+- [Nightly 版](https://github.com/AstrBotDevs/AstrBot-desktop/releases/tag/nightly)：基于上游最新提交自动构建，适合提前体验新改动。
+- 下载时请按操作系统与 CPU 架构选择对应安装包。
+
+## 开源协议
+
+本项目采用 `AGPL-3.0` 开源协议，协议全文见：[`LICENSE`](./LICENSE)。
 
 ## 手动构建
 
@@ -44,23 +52,6 @@ make help
 ```
 
 构建产物默认在 `src-tauri/target/release/bundle/`。
-
-## 文档索引
-
-- 架构说明：`docs/architecture.md`
-- 文件组织：`docs/repository-structure.md`
-- 环境变量清单：`docs/environment-variables.md`
-- 重构归档目录：`docs/refactor/`
-- 重构总计划：`docs/refactor/refactor-plan.md`
-- Phase 2 计划：`docs/refactor/refactor-phase2-plan.md`
-- Phase 3 计划：`docs/refactor/refactor-phase3-plan.md`
-- Phase 4 计划：`docs/refactor/refactor-phase4-plan.md`
-- Phase 5 计划：`docs/refactor/refactor-phase5-plan.md`
-- Phase 6 计划：`docs/refactor/refactor-phase6-plan.md`
-- Phase 7 计划：`docs/refactor/refactor-phase7-plan.md`
-- Phase 8 计划：`docs/refactor/refactor-phase8-plan.md`
-- Phase 9 计划：`docs/refactor/refactor-phase9-plan.md`
-- Phase 10 计划：`docs/refactor/refactor-phase10-plan.md`
 
 ## 常用维护命令
 
