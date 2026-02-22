@@ -38,7 +38,7 @@ except ModuleNotFoundError:
         import tomli as toml_parser
     except ModuleNotFoundError:
         print(
-            "A TOML parser is required: Python 3.11+ (tomllib) or tomli package.",
+            "A TOML parser is required. Use Python 3.11+ (tomllib) or install tomli: python3 -m pip install tomli",
             file=sys.stderr,
         )
         raise SystemExit(1)

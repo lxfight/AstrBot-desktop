@@ -17,10 +17,24 @@ if [ -z "${GITHUB_REPOSITORY:-}" ]; then
   exit 1
 fi
 
-release_id="$(
+release_lookup_err="$(mktemp)"
+release_id=""
+if release_id="$(
   gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
-    --jq '.id' 2>/dev/null || true
-)"
+    --jq '.id' 2>"${release_lookup_err}"
+)"; then
+  :
+else
+  if grep -q "HTTP 404" "${release_lookup_err}"; then
+    release_id=""
+  else
+    echo "Failed to resolve release ${RELEASE_TAG} from ${GITHUB_REPOSITORY}:" >&2
+    cat "${release_lookup_err}" >&2
+    rm -f "${release_lookup_err}"
+    exit 1
+  fi
+fi
+rm -f "${release_lookup_err}"
 
 if [ -z "${release_id}" ]; then
   echo "Release ${RELEASE_TAG} does not exist yet. No assets to clean."
