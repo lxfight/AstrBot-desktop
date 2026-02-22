@@ -18,6 +18,7 @@
     IS_DESKTOP_RUNTIME: 'desktop_bridge_is_desktop_runtime',
     GET_BACKEND_STATE: 'desktop_bridge_get_backend_state',
     SET_AUTH_TOKEN: 'desktop_bridge_set_auth_token',
+    SET_SHELL_LOCALE: 'desktop_bridge_set_shell_locale',
     RESTART_BACKEND: 'desktop_bridge_restart_backend',
     STOP_BACKEND: 'desktop_bridge_stop_backend',
     OPEN_EXTERNAL_URL: 'desktop_bridge_open_external_url',
@@ -141,18 +142,31 @@
     }
   };
 
-  const getStoredAuthToken = () => {
+  const TOKEN_STORAGE_KEY = 'token';
+  const SHELL_LOCALE_STORAGE_KEY = 'astrbot-locale';
+  const STORAGE_SYNC_PATCHED_FLAG = '__astrbotDesktopStorageSyncPatched';
+  const LEGACY_TOKEN_SYNC_PATCHED_FLAG = '__astrbotDesktopTokenSyncPatched';
+
+  const normalizeStoredValue = (value) =>
+    typeof value === 'string' && value ? value : null;
+
+  const getStoredValue = (storageKey) => {
     try {
-      const token = window.localStorage?.getItem('token');
-      return typeof token === 'string' && token ? token : null;
+      return normalizeStoredValue(window.localStorage?.getItem(storageKey));
     } catch {
       return null;
     }
   };
 
-  const syncAuthToken = (token = getStoredAuthToken()) =>
+  const getStoredAuthToken = () => getStoredValue(TOKEN_STORAGE_KEY);
+
+  const syncAuthToken = (value = getStoredAuthToken()) =>
     invokeBridge(BRIDGE_COMMANDS.SET_AUTH_TOKEN, {
-      authToken: typeof token === 'string' && token ? token : null
+      authToken: value,
+    });
+  const syncShellLocale = (value = getStoredValue(SHELL_LOCALE_STORAGE_KEY)) =>
+    invokeBridge(BRIDGE_COMMANDS.SET_SHELL_LOCALE, {
+      locale: value,
     });
 
   const IS_DEV =
@@ -630,12 +644,20 @@
     return normalizedFallback;
   };
 
-  const patchLocalStorageTokenSync = () => {
-    if (window.__astrbotDesktopTokenSyncPatched) return;
+  const patchLocalStorageBridgeSync = () => {
+    if (window[STORAGE_SYNC_PATCHED_FLAG]) {
+      return;
+    }
+    // Legacy compatibility: migrate the old guard flag to the new canonical flag.
+    if (window[LEGACY_TOKEN_SYNC_PATCHED_FLAG]) {
+      window[STORAGE_SYNC_PATCHED_FLAG] = true;
+      return;
+    }
     try {
       const storage = window.localStorage;
       if (!storage) return;
-      window.__astrbotDesktopTokenSyncPatched = true;
+      window[STORAGE_SYNC_PATCHED_FLAG] = true;
+      window[LEGACY_TOKEN_SYNC_PATCHED_FLAG] = true;
 
       const rawSetItem = storage.setItem?.bind(storage);
       const rawRemoveItem = storage.removeItem?.bind(storage);
@@ -644,16 +666,20 @@
       if (typeof rawSetItem === 'function') {
         storage.setItem = (key, value) => {
           rawSetItem(key, value);
-          if (key === 'token') {
-            void syncAuthToken(value);
+          if (key === TOKEN_STORAGE_KEY) {
+            void syncAuthToken(getStoredValue(TOKEN_STORAGE_KEY));
+          } else if (key === SHELL_LOCALE_STORAGE_KEY) {
+            void syncShellLocale(getStoredValue(SHELL_LOCALE_STORAGE_KEY));
           }
         };
       }
       if (typeof rawRemoveItem === 'function') {
         storage.removeItem = (key) => {
           rawRemoveItem(key);
-          if (key === 'token') {
+          if (key === TOKEN_STORAGE_KEY) {
             void syncAuthToken(null);
+          } else if (key === SHELL_LOCALE_STORAGE_KEY) {
+            void syncShellLocale(null);
           }
         };
       }
@@ -661,6 +687,7 @@
         storage.clear = () => {
           rawClear();
           void syncAuthToken(null);
+          void syncShellLocale(null);
         };
       }
     } catch {}
@@ -698,6 +725,7 @@
 
   installNavigationBridges();
   void listenToTrayRestartBackendEvent();
-  patchLocalStorageTokenSync();
+  patchLocalStorageBridgeSync();
   void syncAuthToken();
+  void syncShellLocale();
 })();

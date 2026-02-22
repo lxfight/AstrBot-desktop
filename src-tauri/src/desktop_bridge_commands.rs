@@ -2,7 +2,10 @@ use std::process::{Command, Stdio};
 use tauri::{AppHandle, Manager};
 use url::Url;
 
-use crate::{restart_backend_flow, BackendBridgeResult, BackendBridgeState, BackendState};
+use crate::{
+    append_desktop_log, restart_backend_flow, runtime_paths, shell_locale, tray_labels,
+    BackendBridgeResult, BackendBridgeState, BackendState, DEFAULT_SHELL_LOCALE,
+};
 
 fn parse_openable_url(raw_url: &str) -> Result<Url, String> {
     let trimmed = raw_url.trim();
@@ -143,5 +146,33 @@ pub(crate) fn desktop_bridge_open_external_url(url: String) -> BackendBridgeResu
             ok: false,
             reason: Some(error),
         },
+    }
+}
+
+#[tauri::command]
+pub(crate) fn desktop_bridge_set_shell_locale(
+    app_handle: AppHandle,
+    locale: Option<String>,
+) -> BackendBridgeResult {
+    let packaged_root_dir = runtime_paths::default_packaged_root_dir();
+    match shell_locale::write_cached_shell_locale(locale.as_deref(), packaged_root_dir.as_deref()) {
+        Ok(()) => {
+            tray_labels::update_tray_menu_labels(
+                &app_handle,
+                DEFAULT_SHELL_LOCALE,
+                append_desktop_log,
+            );
+            BackendBridgeResult {
+                ok: true,
+                reason: None,
+            }
+        }
+        Err(error) => {
+            append_desktop_log(&format!("failed to persist shell locale: {error}"));
+            BackendBridgeResult {
+                ok: false,
+                reason: Some(error),
+            }
+        }
     }
 }

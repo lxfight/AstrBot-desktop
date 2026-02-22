@@ -21,6 +21,17 @@ pub fn update_tray_menu_labels<F>(
 ) where
     F: Fn(&str),
 {
+    update_tray_menu_labels_with_visibility(app_handle, default_shell_locale, None, log);
+}
+
+pub fn update_tray_menu_labels_with_visibility<F>(
+    app_handle: &AppHandle,
+    default_shell_locale: &'static str,
+    visible_override: Option<bool>,
+    log: F,
+) where
+    F: Fn(&str),
+{
     let Some(tray_state) = app_handle.try_state::<TrayMenuState>() else {
         return;
     };
@@ -30,12 +41,16 @@ pub fn update_tray_menu_labels<F>(
         runtime_paths::default_packaged_root_dir(),
     );
     let shell_texts = shell_locale::shell_texts_for_locale(locale);
-    let is_visible = app_handle
-        .get_webview_window("main")
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(true);
+    let effective_visible = if let Some(visible) = visible_override {
+        visible
+    } else {
+        app_handle
+            .get_webview_window("main")
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(true)
+    };
 
-    let toggle_label = if is_visible {
+    let toggle_label = if effective_visible {
         shell_texts.tray_hide
     } else {
         shell_texts.tray_show

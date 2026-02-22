@@ -3,6 +3,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde_json::{Map, Value};
+
+const LOCALE_FIELD: &str = "locale";
+
+fn empty_state_object() -> Value {
+    Value::Object(Map::new())
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ShellTexts {
     pub tray_hide: &'static str,
@@ -51,7 +59,7 @@ pub fn resolve_shell_locale(
     default_shell_locale
 }
 
-fn normalize_shell_locale(raw: &str) -> Option<&'static str> {
+pub(crate) fn normalize_shell_locale(raw: &str) -> Option<&'static str> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
@@ -88,8 +96,102 @@ fn read_cached_shell_locale(packaged_root_dir: Option<&Path>) -> Option<&'static
     let state_path = desktop_state_path_for_locale(packaged_root_dir)?;
     let raw = fs::read_to_string(state_path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let locale = parsed.get("locale")?.as_str()?;
+    let locale = parsed.get(LOCALE_FIELD)?.as_str()?;
     normalize_shell_locale(locale)
+}
+
+fn ensure_object(value: &mut Value) -> &mut Map<String, Value> {
+    if let Value::Object(map) = value {
+        return map;
+    }
+
+    *value = empty_state_object();
+    // Safe because `value` was just replaced with an object.
+    value
+        .as_object_mut()
+        .expect("value was just normalized into a JSON object")
+}
+
+pub(crate) fn write_cached_shell_locale(
+    locale: Option<&str>,
+    packaged_root_dir: Option<&Path>,
+) -> Result<(), String> {
+    let normalized_locale = locale.and_then(normalize_shell_locale);
+    if let Some(raw_locale) = locale {
+        if normalized_locale.is_none() {
+            crate::append_desktop_log(&format!(
+                "unsupported shell locale '{}'; clearing cached locale",
+                raw_locale
+            ));
+        }
+    }
+
+    let Some(state_path) = desktop_state_path_for_locale(packaged_root_dir) else {
+        crate::append_desktop_log(
+            "shell locale state path is unavailable; skipping locale persistence",
+        );
+        return Ok(());
+    };
+
+    if let Some(parent_dir) = state_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            format!(
+                "Failed to create shell locale directory {}: {}",
+                parent_dir.display(),
+                error
+            )
+        })?;
+    }
+
+    let mut parsed = match fs::read_to_string(&state_path) {
+        Ok(raw) => match serde_json::from_str::<Value>(&raw) {
+            Ok(value) => value,
+            Err(error) => {
+                crate::append_desktop_log(&format!(
+                    "failed to parse shell locale state {}: {}. resetting state file",
+                    state_path.display(),
+                    error
+                ));
+                empty_state_object()
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty_state_object(),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read shell locale state {}: {}",
+                state_path.display(),
+                error
+            ));
+        }
+    };
+    if !parsed.is_object() {
+        crate::append_desktop_log(&format!(
+            "shell locale state {} has non-object root; resetting state file",
+            state_path.display()
+        ));
+    }
+    let object = ensure_object(&mut parsed);
+
+    if let Some(normalized_locale) = normalized_locale {
+        object.insert(
+            LOCALE_FIELD.to_string(),
+            Value::String(normalized_locale.to_string()),
+        );
+    } else {
+        object.remove(LOCALE_FIELD);
+    }
+
+    let serialized = serde_json::to_string_pretty(&parsed)
+        .map_err(|error| format!("Failed to serialize shell locale state: {error}"))?;
+    fs::write(&state_path, serialized).map_err(|error| {
+        format!(
+            "Failed to write shell locale state {}: {}",
+            state_path.display(),
+            error
+        )
+    })?;
+
+    Ok(())
 }
 
 #[cfg(test)]
