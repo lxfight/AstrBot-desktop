@@ -526,7 +526,17 @@ jobs:
                   # gh --paginate emits one JSON value per page; keep array pages and flatten.
                   map(select(type == "array"))
                   | flatten
-                  | map(select(.prerelease == true and .draft == false and .tag_name != $current_tag))
+                  | map(
+                      (.tag_name // "") as $tag
+                      | select(
+                          .prerelease == true
+                          and .draft == false
+                          and .tag_name != $current_tag
+                          # Match nightly-like tags in a case-insensitive way:
+                          # nightly, *-nightly*, *.nightly*, etc.
+                          and ($tag | test("(^|[-.])nightly([-.]|$)"; "i"))
+                        )
+                    )
                   | sort_by(.published_at // .created_at)
                   | reverse
                   | .[0].id // empty
