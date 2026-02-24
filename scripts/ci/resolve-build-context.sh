@@ -22,6 +22,48 @@ is_transient_git_error() {
     '(Could not resolve host|Failed to connect|Connection (timed out|reset|refused)|Operation timed out|Temporary failure|TLS|SSL|HTTP [0-9]*5[0-9]{2}|The requested URL returned error: 5[0-9]{2}|network is unreachable)'
 }
 
+normalize_cron_field() {
+  local field="$1"
+  if printf '%s' "${field}" | grep -Eq '^[0-9]+$'; then
+    printf '%d' "${field}"
+    return 0
+  fi
+  printf '%s' "${field}"
+}
+
+normalize_cron_expression() {
+  local raw="$1"
+  local normalized
+  local -a parts
+  normalized="$(printf '%s' "${raw}" | tr -s '[:space:]' ' ' | sed -e 's/^ *//' -e 's/ *$//')"
+
+  if [ -z "${normalized}" ]; then
+    printf '\n'
+    return 0
+  fi
+
+  IFS=' ' read -r -a parts <<< "${normalized}"
+  if [ "${#parts[@]}" -ne 5 ]; then
+    printf '%s\n' "${normalized}"
+    return 0
+  fi
+
+  local minute hour dom month dow
+  minute="$(normalize_cron_field "${parts[0]}")"
+  hour="$(normalize_cron_field "${parts[1]}")"
+  dom="$(normalize_cron_field "${parts[2]}")"
+  month="$(normalize_cron_field "${parts[3]}")"
+  dow="${parts[4]}"
+  printf '%s %s %s %s %s\n' "${minute}" "${hour}" "${dom}" "${month}" "${dow}"
+}
+
+cron_expressions_match() {
+  local left right
+  left="$(normalize_cron_expression "$1")"
+  right="$(normalize_cron_expression "$2")"
+  [ -n "${left}" ] && [ -n "${right}" ] && [ "${left}" = "${right}" ]
+}
+
 sanitize_positive_int() {
   local raw="$1"
   local fallback="$2"
@@ -84,7 +126,9 @@ git_ls_remote_with_retry() {
 source_git_url="${ASTRBOT_SOURCE_GIT_URL}"
 source_git_ref="${ASTRBOT_SOURCE_GIT_REF}"
 nightly_source_git_ref="${ASTRBOT_NIGHTLY_SOURCE_GIT_REF:-master}"
+nightly_schedule_cron="${ASTRBOT_NIGHTLY_SCHEDULE_CRON:-}"
 nightly_utc_hour="${ASTRBOT_NIGHTLY_UTC_HOUR:-${DEFAULT_NIGHTLY_UTC_HOUR}}"
+event_schedule_raw="${GITHUB_EVENT_SCHEDULE:-}"
 # When WORKFLOW_BUILD_MODE is unset, we intentionally default to different modes
 # based on the triggering event:
 # - "nightly" for workflow_dispatch events (manual nightly intent)
@@ -168,23 +212,38 @@ case "${GITHUB_EVENT_NAME}" in
     ;;
   schedule)
     publish_release="true"
-    current_utc_hour="$(date -u +%H)"
     if [ "${requested_build_mode}" = "auto" ]; then
-      if [ "${current_utc_hour}" = "${nightly_utc_hour_padded}" ]; then
-        build_mode="nightly"
-        echo "::notice::schedule build_mode=auto resolved to nightly at UTC hour ${current_utc_hour}."
+      if [ -n "${event_schedule_raw}" ] && [ -n "${nightly_schedule_cron}" ]; then
+        if cron_expressions_match "${event_schedule_raw}" "${nightly_schedule_cron}"; then
+          build_mode="nightly"
+          echo "::notice::schedule build_mode=auto resolved to nightly via cron '${event_schedule_raw}' (target nightly cron '${nightly_schedule_cron}')."
+        else
+          build_mode="tag-poll"
+          echo "::notice::schedule build_mode=auto resolved to tag-poll via cron '${event_schedule_raw}' (target nightly cron '${nightly_schedule_cron}')."
+        fi
       else
-        build_mode="tag-poll"
-        echo "::notice::schedule build_mode=auto resolved to tag-poll at UTC hour ${current_utc_hour} (nightly hour ${nightly_utc_hour_padded})."
+        # Compatibility fallback for environments where github.event.schedule
+        # or ASTRBOT_NIGHTLY_SCHEDULE_CRON is unset: keep previous hour-based routing.
+        if [ -n "${event_schedule_raw}" ] && [ -z "${nightly_schedule_cron}" ]; then
+          echo "::warning::ASTRBOT_NIGHTLY_SCHEDULE_CRON is empty; falling back to hour-based schedule routing."
+        fi
+        current_utc_hour="$(date -u +%H)"
+        if [ "${current_utc_hour}" = "${nightly_utc_hour_padded}" ]; then
+          build_mode="nightly"
+          echo "::notice::schedule build_mode=auto resolved to nightly at UTC hour ${current_utc_hour} (fallback routing)."
+        else
+          build_mode="tag-poll"
+          echo "::notice::schedule build_mode=auto resolved to tag-poll at UTC hour ${current_utc_hour} (nightly hour ${nightly_utc_hour_padded}, fallback routing)."
+        fi
       fi
     else
       build_mode="${requested_build_mode}"
       echo "::notice::schedule run using explicit WORKFLOW_BUILD_MODE=${build_mode}."
     fi
     if [ "${build_mode}" = "nightly" ]; then
-      echo "Scheduled nightly run at UTC hour ${current_utc_hour}."
+      echo "Scheduled nightly run selected."
     elif [ "${build_mode}" = "tag-poll" ]; then
-      echo "Scheduled tag polling run at UTC hour ${current_utc_hour}."
+      echo "Scheduled tag polling run selected."
     fi
     ;;
   *)
