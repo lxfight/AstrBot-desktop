@@ -1,4 +1,5 @@
 use tauri::{webview::PageLoadEvent, Manager, RunEvent, WindowEvent};
+use tauri_plugin_updater::UpdaterExt;
 
 use crate::{
     append_desktop_log, append_startup_log, desktop_bridge, exit_events, startup_loading,
@@ -17,6 +18,8 @@ pub(crate) fn run() {
         .display()
     ));
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(BackendState::default())
         .invoke_handler(tauri::generate_handler![
             crate::desktop_bridge_commands::desktop_bridge_is_desktop_runtime,
@@ -25,7 +28,9 @@ pub(crate) fn run() {
             crate::desktop_bridge_commands::desktop_bridge_set_shell_locale,
             crate::desktop_bridge_commands::desktop_bridge_restart_backend,
             crate::desktop_bridge_commands::desktop_bridge_stop_backend,
-            crate::desktop_bridge_commands::desktop_bridge_open_external_url
+            crate::desktop_bridge_commands::desktop_bridge_open_external_url,
+            crate::desktop_bridge_commands::desktop_bridge_check_desktop_app_update,
+            crate::desktop_bridge_commands::desktop_bridge_install_desktop_app_update,
         ])
         .on_window_event(|window, event| {
             if window.label() != "main" {
@@ -96,6 +101,37 @@ pub(crate) fn run() {
             }
 
             startup_task::spawn_startup_task(app_handle.clone(), append_startup_log);
+
+            // 启动时自动检查更新（静默模式，不显示错误提示）
+            let startup_app_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                match startup_app_handle.updater() {
+                    Ok(updater) => {
+                        match updater.check().await {
+                            Ok(Some(update)) => {
+                                append_startup_log(&format!(
+                                    "发现新版本可用：{} (当前版本：{})",
+                                    update.version,
+                                    startup_app_handle.package_info().version
+                                ));
+                                // 可以在这里发送事件到前端，让用户选择是否更新
+                            }
+                            Ok(None) => {
+                                append_startup_log("当前已是最新版本");
+                            }
+                            Err(error) => {
+                                // 静默处理错误，只记录到日志，不显示给用户
+                                // 首次安装或 latest.json 不存在时会触发此错误，属于正常情况
+                                append_startup_log(&format!("检查更新（静默）：{error}"));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        append_startup_log(&format!("初始化更新器失败：{error}"));
+                    }
+                }
+            });
+
             Ok(())
         })
         .build(tauri::generate_context!())

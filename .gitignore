@@ -14,6 +14,11 @@ resources/webui/
 # rust/tauri build outputs
 src-tauri/target/
 src-tauri/gen/
+src-tauri/tauri.build.config.json
+
+# tauri signing keys
+.tauri/*.key
+.tauri/*.key.pub
 
 # logs
 *.log
