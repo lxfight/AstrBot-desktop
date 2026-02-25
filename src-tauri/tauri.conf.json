@@ -59,7 +59,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZEQ0E3RkVDRTgzMzc0OEEKUldTS2REUG83SC9LL2VRUllQRUFwNXJtNjdiVkNlZHB6Qm1YazhpQm9BQkVEQk5mY2YyekRDK0kK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE4RTA3Mjc5MzExQjhFQkIKUldTN2poc3hlWExncUpkOEtUZk5lN3Q2ei9VREFkREV4c3FCVDJ1UFN2bHZXV1BHaFhSeEl0VjkK",
       "endpoints": [
         "https://github.com/AstrBotDevs/AstrBot-desktop/releases/latest/download/latest.json"
       ],
