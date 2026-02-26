@@ -255,10 +255,24 @@ jobs:
           fi
           echo "Collected Linux updater bundle: ${target_bundle}"
 
-      - name: Upload artifacts
+      - name: Upload artifacts (attempt 1)
+        id: upload_linux_artifacts
+        continue-on-error: true
         uses: actions/upload-artifact@v6.0.0
         with:
           name: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/release/bundle/updater/*
+
+      - name: Upload artifacts (retry)
+        if: ${{ steps.upload_linux_artifacts.outcome == 'failure' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-linux-${{ matrix.arch }}
+          overwrite: true
           if-no-files-found: error
           path: |
             src-tauri/target/release/bundle/**/*.deb
@@ -448,10 +462,24 @@ jobs:
             echo "No macOS updater bundle (${updater_bundle}) found; skip."
           fi
 
-      - name: Upload artifacts
+      - name: Upload artifacts (attempt 1)
+        id: upload_macos_artifacts
+        continue-on-error: true
         uses: actions/upload-artifact@v6.0.0
         with:
           name: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-macos-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/zip/*.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/zip/*_updater.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/zip/*_updater.tar.gz.sig
+
+      - name: Upload artifacts (retry)
+        if: ${{ steps.upload_macos_artifacts.outcome == 'failure' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-macos-${{ matrix.arch }}
+          overwrite: true
           if-no-files-found: error
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/zip/*.zip
@@ -553,10 +581,25 @@ jobs:
           fi
           echo "Collected Windows updater bundle: ${target_bundle}"
 
-      - name: Upload artifacts
+      - name: Upload artifacts (attempt 1)
+        id: upload_windows_artifacts
+        continue-on-error: true
         uses: actions/upload-artifact@v6.0.0
         with:
           name: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-windows-${{ matrix.arch }}
+          if-no-files-found: error
+          # Only upload Windows installer executables.
+          # A broad **/*.exe pattern also matches bundled Python runtime helpers.
+          path: |
+            ${{ env.WINDOWS_INSTALLER_EXE_GLOBS }}
+            src-tauri/target/release/bundle/updater/*
+
+      - name: Upload artifacts (retry)
+        if: ${{ steps.upload_windows_artifacts.outcome == 'failure' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: astrbot-desktop-tauri-${{ needs.resolve_build_context.outputs.astrbot_version }}-windows-${{ matrix.arch }}
+          overwrite: true
           if-no-files-found: error
           # Only upload Windows installer executables.
           # A broad **/*.exe pattern also matches bundled Python runtime helpers.
