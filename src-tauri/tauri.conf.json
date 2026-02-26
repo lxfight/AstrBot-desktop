@@ -61,7 +61,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIyMDM5REEwQ0QyNDM0RDEKUldUUk5DVE5vSjBEc2xGNVhaTWlWck93S3ZDZ0tYUXdtdVg0WDF6R3JkOHVJRmdBeWRkeENUblYK",
       "endpoints": [
-        "https://github.com/AstrBotDevs/AstrBot-desktop/releases/latest/download/latest.json"
+        "https://github.com/lxfight/AstrBot-desktop/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"
