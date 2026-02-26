@@ -388,6 +388,7 @@ jobs:
 
       - name: Package macOS app as zip
         env:
+          ASTRBOT_VERSION: ${{ needs.resolve_build_context.outputs.astrbot_version }}
           RESOLVED_APP_BUNDLE_NAME: ${{ steps.resolve_macos_app_bundle.outputs.app_bundle_name }}
           RESOLVED_APP_BUNDLE_NAME_SOURCE: ${{ steps.resolve_macos_app_bundle.outputs.app_bundle_name_source }}
         shell: bash
