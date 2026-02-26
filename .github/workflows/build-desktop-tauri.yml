@@ -247,6 +247,11 @@ jobs:
           cp "${source_bundle}" "${target_bundle}"
           if [ -f "${source_bundle}.sig" ]; then
             cp "${source_bundle}.sig" "${target_bundle}.sig"
+          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::Missing updater signature: ${source_bundle}.sig (TAURI_SIGNING_PRIVATE_KEY is set)"
+            exit 1
+          else
+            echo "::warning::No updater signature generated for ${source_bundle}; this platform will be omitted from latest.json."
           fi
           echo "Collected Linux updater bundle: ${target_bundle}"
 
@@ -432,6 +437,11 @@ jobs:
             cp "${updater_bundle}" "${updater_target}"
             if [ -f "${updater_bundle}.sig" ]; then
               cp "${updater_bundle}.sig" "${updater_target}.sig"
+            elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+              echo "::error::Missing updater signature: ${updater_bundle}.sig (TAURI_SIGNING_PRIVATE_KEY is set)"
+              exit 1
+            else
+              echo "::warning::No updater signature generated for ${updater_bundle}; this platform will be omitted from latest.json."
             fi
             echo "Collected macOS updater bundle: ${updater_target}"
           else
@@ -535,6 +545,11 @@ jobs:
           cp "${source_bundle}" "${target_bundle}"
           if [ -f "${source_bundle}.sig" ]; then
             cp "${source_bundle}.sig" "${target_bundle}.sig"
+          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::Missing updater signature: ${source_bundle}.sig (TAURI_SIGNING_PRIVATE_KEY is set)"
+            exit 1
+          else
+            echo "::warning::No updater signature generated for ${source_bundle}; this platform will be omitted from latest.json."
           fi
           echo "Collected Windows updater bundle: ${target_bundle}"
 

@@ -68,14 +68,16 @@ def extract_platform_info(filename: str) -> dict[str, str] | None:
     - AstrBot_{version}_windows_{arch}_updater.zip
     - AstrBot_{version}_linux_{arch}_updater.tar.gz
     - AstrBot_{version}_macos_{arch}_updater.tar.gz
+    where {arch} supports both legacy names (x86_64/aarch64)
+    and normalized artifact names (amd64/arm64).
     """
     patterns = [
         # Windows
-        (r"AstrBot_.*_windows_(x86_64|aarch64|armv7)_updater\.zip", "windows", None),
+        (r"AstrBot_.*_windows_(x86_64|aarch64|armv7|amd64|arm64)_updater\.zip", "windows", None),
         # Linux
-        (r"AstrBot_.*_linux_(x86_64|aarch64|armv7)_updater\.tar\.gz", "linux", None),
+        (r"AstrBot_.*_linux_(x86_64|aarch64|armv7|amd64|arm64)_updater\.tar\.gz", "linux", None),
         # macOS
-        (r"AstrBot_.*_macos_(x86_64|aarch64|universal)_updater\.tar\.gz", "darwin", None),
+        (r"AstrBot_.*_macos_(x86_64|aarch64|universal|amd64|arm64)_updater\.tar\.gz", "darwin", None),
     ]
 
     for pattern, os_name, _ in patterns:
@@ -88,6 +90,8 @@ def extract_platform_info(filename: str) -> dict[str, str] | None:
                 "aarch64": "aarch64",
                 "armv7": "armv7",
                 "universal": "universal",
+                "amd64": "x86_64",
+                "arm64": "aarch64",
             }
             normalized_arch = arch_map.get(arch, arch)
             return {"os": os_name, "arch": normalized_arch}

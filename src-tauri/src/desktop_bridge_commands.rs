@@ -282,12 +282,17 @@ pub(crate) async fn desktop_bridge_install_desktop_app_update(
         }
     };
 
-    append_desktop_log(&format!("desktop app update {target_version} downloaded, prompting user for installation"));
+    append_desktop_log(&format!(
+        "desktop app update {target_version} downloaded, prompting user for installation"
+    ));
 
     // 下载完成后，弹出对话框询问用户是否安装
     let dialog = app_handle.dialog();
     let should_install = dialog
-        .message(format!("新版本 {} 已下载完成，是否立即安装并重启应用？", target_version))
+        .message(format!(
+            "新版本 {} 已下载完成，是否立即安装并重启应用？",
+            target_version
+        ))
         .title("更新已就绪")
         .kind(tauri_plugin_dialog::MessageDialogKind::Info)
         .buttons(tauri_plugin_dialog::MessageDialogButtons::YesNo)

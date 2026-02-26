@@ -129,7 +129,9 @@ pub(crate) fn run() {
                                         startup_app_handle.restart();
                                     }
                                     Err(error) => {
-                                        append_startup_log(&format!("[更新检查] 安装更新失败：{error}"));
+                                        append_startup_log(&format!(
+                                            "[更新检查] 安装更新失败：{error}"
+                                        ));
                                     }
                                 }
                             }
@@ -139,7 +141,9 @@ pub(crate) fn run() {
                             Err(error) => {
                                 // 静默处理错误，只记录到日志，不显示给用户
                                 // 首次安装或 latest.json 不存在时会触发此错误，属于正常情况
-                                append_startup_log(&format!("[更新检查] 检查更新（静默）：{error}"));
+                                append_startup_log(&format!(
+                                    "[更新检查] 检查更新（静默）：{error}"
+                                ));
                             }
                         }
                     }
