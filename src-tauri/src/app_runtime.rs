@@ -102,32 +102,49 @@ pub(crate) fn run() {
 
             startup_task::spawn_startup_task(app_handle.clone(), append_startup_log);
 
-            // 启动时自动检查更新（静默模式，不显示错误提示）
+            // 启动时自动检查并安装更新（静默模式）
             let startup_app_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
+                append_startup_log("[更新检查] 正在初始化更新器...");
                 match startup_app_handle.updater() {
                     Ok(updater) => {
+                        append_startup_log("[更新检查] 更新器初始化成功，正在检查更新...");
                         match updater.check().await {
                             Ok(Some(update)) => {
+                                let new_version = update.version.to_string();
                                 append_startup_log(&format!(
-                                    "发现新版本可用：{} (当前版本：{})",
-                                    update.version,
+                                    "[更新检查] 发现新版本可用：{} (当前版本：{})，开始自动更新",
+                                    new_version,
                                     startup_app_handle.package_info().version
                                 ));
-                                // 可以在这里发送事件到前端，让用户选择是否更新
+                                append_startup_log("[更新检查] 正在下载更新...");
+                                // 自动下载并安装更新
+                                match update.download_and_install(|_, _| {}, || {}).await {
+                                    Ok(()) => {
+                                        append_startup_log(&format!(
+                                            "[更新检查] 更新 {} 下载并安装完成，正在重启应用",
+                                            new_version
+                                        ));
+                                        // 安装完成后重启应用
+                                        startup_app_handle.restart();
+                                    }
+                                    Err(error) => {
+                                        append_startup_log(&format!("[更新检查] 安装更新失败：{error}"));
+                                    }
+                                }
                             }
                             Ok(None) => {
-                                append_startup_log("当前已是最新版本");
+                                append_startup_log("[更新检查] 当前已是最新版本");
                             }
                             Err(error) => {
                                 // 静默处理错误，只记录到日志，不显示给用户
                                 // 首次安装或 latest.json 不存在时会触发此错误，属于正常情况
-                                append_startup_log(&format!("检查更新（静默）：{error}"));
+                                append_startup_log(&format!("[更新检查] 检查更新（静默）：{error}"));
                             }
                         }
                     }
                     Err(error) => {
-                        append_startup_log(&format!("初始化更新器失败：{error}"));
+                        append_startup_log(&format!("[更新检查] 初始化更新器失败：{error}"));
                     }
                 }
             });

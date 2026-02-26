@@ -27,5 +27,11 @@ fi
 echo "Building Windows installers with bundles: ${bundles}"
 (
   cd "${root_dir}"
-  cargo tauri build --bundles "${bundles}"
+  if [ -n "${ASTRBOT_TAURI_CONFIG_PATH:-}" ]; then
+    echo "Using Tauri config: ${ASTRBOT_TAURI_CONFIG_PATH}"
+    cargo tauri build --config "${ASTRBOT_TAURI_CONFIG_PATH}" --bundles "${bundles}"
+  else
+    echo "No Tauri config override, using default tauri.conf.json"
+    cargo tauri build --bundles "${bundles}"
+  fi
 )

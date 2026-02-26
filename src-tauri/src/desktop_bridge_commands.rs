@@ -235,6 +235,8 @@ pub(crate) async fn desktop_bridge_check_desktop_app_update(
 pub(crate) async fn desktop_bridge_install_desktop_app_update(
     app_handle: AppHandle,
 ) -> BackendBridgeResult {
+    use tauri_plugin_dialog::DialogExt;
+
     let updater = match app_handle.updater() {
         Ok(updater) => updater,
         Err(error) => {
@@ -267,7 +269,40 @@ pub(crate) async fn desktop_bridge_install_desktop_app_update(
 
     let target_version = update.version.to_string();
 
-    if let Err(error) = update.download_and_install(|_, _| {}, || {}).await {
+    // 下载更新（带进度回调 + 下载完成回调）
+    let downloaded_bytes = match update.download(|_, _| {}, || {}).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let reason = format!("Failed to download desktop app update: {error}");
+            append_desktop_log(&reason);
+            return BackendBridgeResult {
+                ok: false,
+                reason: Some(reason),
+            };
+        }
+    };
+
+    append_desktop_log(&format!("desktop app update {target_version} downloaded, prompting user for installation"));
+
+    // 下载完成后，弹出对话框询问用户是否安装
+    let dialog = app_handle.dialog();
+    let should_install = dialog
+        .message(format!("新版本 {} 已下载完成，是否立即安装并重启应用？", target_version))
+        .title("更新已就绪")
+        .kind(tauri_plugin_dialog::MessageDialogKind::Info)
+        .buttons(tauri_plugin_dialog::MessageDialogButtons::YesNo)
+        .blocking_show();
+
+    if !should_install {
+        append_desktop_log("user declined to install update");
+        return BackendBridgeResult {
+            ok: true,
+            reason: Some("user declined".to_string()),
+        };
+    }
+
+    // 用户确认安装，执行安装并重启
+    if let Err(error) = update.install(&downloaded_bytes) {
         let reason = format!("Failed to install desktop app update: {error}");
         append_desktop_log(&reason);
         return BackendBridgeResult {
