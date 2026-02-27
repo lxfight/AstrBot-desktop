@@ -51,21 +51,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    # Default updater endpoint
-    default_endpoint = "https://github.com/AstrBotDevs/AstrBot-desktop/releases/latest/download/latest.json"
-
     config: dict[str, Any] = {
         "bundle": {
             "createUpdaterArtifacts": not args.disable_updater_artifacts,
         },
         "plugins": {
-            "updater": {
-                "endpoints": [args.updater_endpoint or default_endpoint],
-            },
+            "updater": {},
         },
     }
 
-    # Only include pubkey if provided
+    # Only override endpoints and pubkey when explicitly provided;
+    # otherwise tauri.conf.json values are used as-is.
+    if args.updater_endpoint:
+        config["plugins"]["updater"]["endpoints"] = [args.updater_endpoint]
     if args.updater_pubkey:
         config["plugins"]["updater"]["pubkey"] = args.updater_pubkey
 

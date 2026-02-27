@@ -53,7 +53,10 @@ const syncResourceDir = async (source, target) => {
 const resolveDesktopReleaseBaseUrl = () => {
   const raw = process.env.ASTRBOT_DESKTOP_RELEASE_BASE_URL;
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
-  return trimmed || 'https://github.com/AstrBotDevs/AstrBot-desktop/releases';
+  if (trimmed) return trimmed;
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (repo) return `https://github.com/${repo}/releases`;
+  return 'https://github.com/AstrBotDevs/AstrBot-desktop/releases';
 };
 
 export const prepareWebui = async ({
