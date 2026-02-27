@@ -188,9 +188,7 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev
+            patchelf
 
       - name: Setup desktop build environment
         uses: ./.github/actions/setup-desktop-build
@@ -220,9 +218,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # linuxdeploy is itself an AppImage; CI containers lack FUSE, so extract-and-run instead.
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: cargo tauri build --config "${ASTRBOT_TAURI_CONFIG_PATH}" --bundles deb,rpm,appimage
+        run: cargo tauri build --config "${ASTRBOT_TAURI_CONFIG_PATH}" --bundles deb,rpm
 
       - name: Collect Linux updater artifacts (if any)
         env:
