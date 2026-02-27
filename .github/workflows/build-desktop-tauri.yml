@@ -218,7 +218,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: cargo tauri build --config "${ASTRBOT_TAURI_CONFIG_PATH}" --bundles deb,rpm
+        run: cargo tauri build --config "${ASTRBOT_TAURI_CONFIG_PATH}" --bundles deb,rpm,appimage
 
       - name: Collect Linux updater artifacts (if any)
         env:
@@ -557,9 +557,14 @@ jobs:
           mkdir -p "${updater_dir}"
           shopt -s nullglob
 
-          updater_candidates=(src-tauri/target/release/bundle/nsis/*.nsis.zip)
+          updater_candidates=(
+            src-tauri/target/release/bundle/nsis/*.zip
+            src-tauri/target/release/bundle/msi/*.msi.zip
+          )
           if [ "${#updater_candidates[@]}" -eq 0 ]; then
-            echo "No Windows updater bundle (*.nsis.zip) found; skip."
+            echo "No Windows updater bundle (*.zip/*.msi.zip) found; skip."
+            echo "Available files under src-tauri/target/release/bundle:"
+            find src-tauri/target/release/bundle -maxdepth 3 -type f | sort || true
             exit 0
           fi
           if [ "${#updater_candidates[@]}" -gt 1 ]; then
