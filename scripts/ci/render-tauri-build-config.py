@@ -55,17 +55,17 @@ def main() -> int:
         "bundle": {
             "createUpdaterArtifacts": not args.disable_updater_artifacts,
         },
-        "plugins": {
-            "updater": {},
-        },
     }
 
-    # Only override endpoints and pubkey when explicitly provided;
-    # otherwise tauri.conf.json values are used as-is.
+    # Only include plugins.updater when there are explicit overrides;
+    # an empty updater object can shallow-merge over tauri.conf.json and wipe pubkey/endpoints.
+    updater_overrides: dict[str, Any] = {}
     if args.updater_endpoint:
-        config["plugins"]["updater"]["endpoints"] = [args.updater_endpoint]
+        updater_overrides["endpoints"] = [args.updater_endpoint]
     if args.updater_pubkey:
-        config["plugins"]["updater"]["pubkey"] = args.updater_pubkey
+        updater_overrides["pubkey"] = args.updater_pubkey
+    if updater_overrides:
+        config["plugins"] = {"updater": updater_overrides}
 
     # Write output
     output_path = Path(args.output)
