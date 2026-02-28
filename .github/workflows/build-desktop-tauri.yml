@@ -557,12 +557,21 @@ jobs:
           mkdir -p "${updater_dir}"
           shopt -s nullglob
 
+          # Tauri v2 default updater artifacts on Windows are self-contained
+          # installers (.exe for NSIS or .msi for WiX). Legacy v1-compatible
+          # mode produces zipped updater bundles.
           updater_candidates=(
-            src-tauri/target/release/bundle/nsis/*.zip
-            src-tauri/target/release/bundle/msi/*.msi.zip
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
           )
           if [ "${#updater_candidates[@]}" -eq 0 ]; then
-            echo "No Windows updater bundle (*.zip/*.msi.zip) found; skip."
+            updater_candidates=(
+              src-tauri/target/release/bundle/nsis/*.zip
+              src-tauri/target/release/bundle/msi/*.msi.zip
+            )
+          fi
+          if [ "${#updater_candidates[@]}" -eq 0 ]; then
+            echo "No Windows updater bundle (*.exe/*.msi/*.zip/*.msi.zip) found; skip."
             echo "Available files under src-tauri/target/release/bundle:"
             find src-tauri/target/release/bundle -maxdepth 3 -type f | sort || true
             exit 0
@@ -574,7 +583,17 @@ jobs:
           fi
 
           source_bundle="${updater_candidates[0]}"
-          target_bundle="${updater_dir}/AstrBot_${ASTRBOT_VERSION}_windows_${TARGET_ARCH}_updater.zip"
+          case "${source_bundle}" in
+            *.msi.zip) target_ext=".msi.zip" ;;
+            *.exe) target_ext=".exe" ;;
+            *.msi) target_ext=".msi" ;;
+            *.zip) target_ext=".zip" ;;
+            *)
+              echo "::error::Unsupported Windows updater bundle extension: ${source_bundle}"
+              exit 1
+              ;;
+          esac
+          target_bundle="${updater_dir}/AstrBot_${ASTRBOT_VERSION}_windows_${TARGET_ARCH}_updater${target_ext}"
           cp "${source_bundle}" "${target_bundle}"
           if [ -f "${source_bundle}.sig" ]; then
             cp "${source_bundle}.sig" "${target_bundle}.sig"

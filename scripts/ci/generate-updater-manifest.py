@@ -65,7 +65,10 @@ def extract_platform_info(filename: str) -> dict[str, str] | None:
     Extract platform and architecture from artifact filename.
 
     Expected patterns:
+    - AstrBot_{version}_windows_{arch}_updater.exe
+    - AstrBot_{version}_windows_{arch}_updater.msi
     - AstrBot_{version}_windows_{arch}_updater.zip
+    - AstrBot_{version}_windows_{arch}_updater.msi.zip
     - AstrBot_{version}_linux_{arch}_updater.tar.gz
     - AstrBot_{version}_macos_{arch}_updater.tar.gz
     where {arch} supports both legacy names (x86_64/aarch64)
@@ -73,7 +76,11 @@ def extract_platform_info(filename: str) -> dict[str, str] | None:
     """
     patterns = [
         # Windows
-        (r"AstrBot_.*_windows_(x86_64|aarch64|armv7|amd64|arm64)_updater\.zip", "windows", None),
+        (
+            r"AstrBot_.*_windows_(x86_64|aarch64|armv7|amd64|arm64)_updater(?:\.msi\.zip|\.zip|\.exe|\.msi)$",
+            "windows",
+            None,
+        ),
         # Linux
         (r"AstrBot_.*_linux_(x86_64|aarch64|armv7|amd64|arm64)_updater\.tar\.gz", "linux", None),
         # macOS
@@ -103,6 +110,12 @@ def find_updater_artifacts(artifact_dir: Path) -> list[Path]:
     """Find all updater artifacts in the directory."""
     artifacts = []
     patterns = [
+        "*_updater.exe",
+        "*_updater.exe.sig",
+        "*_updater.msi",
+        "*_updater.msi.sig",
+        "*_updater.msi.zip",
+        "*_updater.msi.zip.sig",
         "*_updater.zip",
         "*_updater.zip.sig",
         "*_updater.tar.gz",
