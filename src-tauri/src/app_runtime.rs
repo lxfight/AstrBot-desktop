@@ -17,6 +17,10 @@ pub(crate) fn run() {
         .display()
     ));
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            append_desktop_log("detected second instance launch, focusing existing main window");
+            window_actions::show_main_window(app, DEFAULT_SHELL_LOCALE, append_desktop_log);
+        }))
         .manage(BackendState::default())
         .invoke_handler(tauri::generate_handler![
             crate::desktop_bridge_commands::desktop_bridge_is_desktop_runtime,
