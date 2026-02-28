@@ -47,7 +47,7 @@ pub(crate) use app_helpers::{
     navigate_main_window_to_backend,
 };
 pub(crate) use app_types::{
-    AtomicFlagGuard, BackendBridgeResult, BackendBridgeState, BackendState,
+    AtomicFlagGuard, AutoUpdateCheckState, BackendBridgeResult, BackendBridgeState, BackendState,
     DesktopAppUpdateCheckResult, LaunchPlan, RuntimeManifest, TrayMenuState,
 };
 

@@ -17,6 +17,7 @@ pub(crate) struct TrayMenuState {
     pub(crate) toggle_item: MenuItem<tauri::Wry>,
     pub(crate) reload_item: MenuItem<tauri::Wry>,
     pub(crate) restart_backend_item: MenuItem<tauri::Wry>,
+    pub(crate) auto_update_check_item: MenuItem<tauri::Wry>,
     pub(crate) quit_item: MenuItem<tauri::Wry>,
 }
 
@@ -46,6 +47,33 @@ pub(crate) struct BackendState {
     pub(crate) exit_state: Mutex<exit_state::ExitStateMachine>,
     pub(crate) is_spawning: AtomicBool,
     pub(crate) is_restarting: AtomicBool,
+}
+
+#[derive(Debug)]
+pub(crate) struct AutoUpdateCheckState {
+    pub(crate) enabled: Mutex<bool>,
+}
+
+impl AutoUpdateCheckState {
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self {
+            enabled: Mutex::new(enabled),
+        }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled.lock().map(|guard| *guard).unwrap_or(true)
+    }
+
+    pub(crate) fn toggle(&self) -> bool {
+        match self.enabled.lock() {
+            Ok(mut guard) => {
+                *guard = !*guard;
+                *guard
+            }
+            Err(_) => true,
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

@@ -6,6 +6,7 @@ use std::{
 use serde_json::{Map, Value};
 
 const LOCALE_FIELD: &str = "locale";
+const AUTO_UPDATE_CHECK_ENABLED_FIELD: &str = "auto_update_check_enabled";
 
 fn empty_state_object() -> Value {
     Value::Object(Map::new())
@@ -17,6 +18,8 @@ pub struct ShellTexts {
     pub tray_show: &'static str,
     pub tray_reload: &'static str,
     pub tray_restart_backend: &'static str,
+    pub tray_auto_update_check_on: &'static str,
+    pub tray_auto_update_check_off: &'static str,
     pub tray_quit: &'static str,
 }
 
@@ -27,6 +30,8 @@ pub fn shell_texts_for_locale(locale: &str) -> ShellTexts {
             tray_show: "Show AstrBot",
             tray_reload: "Reload",
             tray_restart_backend: "Restart Backend",
+            tray_auto_update_check_on: "Auto Update Check: On",
+            tray_auto_update_check_off: "Auto Update Check: Off",
             tray_quit: "Quit",
         };
     }
@@ -36,6 +41,8 @@ pub fn shell_texts_for_locale(locale: &str) -> ShellTexts {
         tray_show: "显示 AstrBot",
         tray_reload: "重新加载",
         tray_restart_backend: "重启后端",
+        tray_auto_update_check_on: "自动检查更新：开",
+        tray_auto_update_check_off: "自动检查更新：关",
         tray_quit: "退出",
     }
 }
@@ -81,7 +88,7 @@ pub(crate) fn normalize_shell_locale(raw: &str) -> Option<&'static str> {
     None
 }
 
-fn desktop_state_path_for_locale(packaged_root_dir: Option<&Path>) -> Option<PathBuf> {
+fn desktop_state_path(packaged_root_dir: Option<&Path>) -> Option<PathBuf> {
     if let Ok(root) = env::var("ASTRBOT_ROOT") {
         let path = PathBuf::from(root.trim());
         if !path.as_os_str().is_empty() {
@@ -93,7 +100,7 @@ fn desktop_state_path_for_locale(packaged_root_dir: Option<&Path>) -> Option<Pat
 }
 
 fn read_cached_shell_locale(packaged_root_dir: Option<&Path>) -> Option<&'static str> {
-    let state_path = desktop_state_path_for_locale(packaged_root_dir)?;
+    let state_path = desktop_state_path(packaged_root_dir)?;
     let raw = fs::read_to_string(state_path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let locale = parsed.get(LOCALE_FIELD)?.as_str()?;
@@ -126,7 +133,7 @@ pub(crate) fn write_cached_shell_locale(
         }
     }
 
-    let Some(state_path) = desktop_state_path_for_locale(packaged_root_dir) else {
+    let Some(state_path) = desktop_state_path(packaged_root_dir) else {
         crate::append_desktop_log(
             "shell locale state path is unavailable; skipping locale persistence",
         );
@@ -186,6 +193,82 @@ pub(crate) fn write_cached_shell_locale(
     fs::write(&state_path, serialized).map_err(|error| {
         format!(
             "Failed to write shell locale state {}: {}",
+            state_path.display(),
+            error
+        )
+    })?;
+
+    Ok(())
+}
+
+pub(crate) fn read_cached_auto_update_check_enabled(
+    packaged_root_dir: Option<&Path>,
+) -> Option<bool> {
+    let state_path = desktop_state_path(packaged_root_dir)?;
+    let raw = fs::read_to_string(state_path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    parsed.get(AUTO_UPDATE_CHECK_ENABLED_FIELD)?.as_bool()
+}
+
+pub(crate) fn write_cached_auto_update_check_enabled(
+    enabled: bool,
+    packaged_root_dir: Option<&Path>,
+) -> Result<(), String> {
+    let Some(state_path) = desktop_state_path(packaged_root_dir) else {
+        crate::append_desktop_log(
+            "auto update state path is unavailable; skipping update preference persistence",
+        );
+        return Ok(());
+    };
+
+    if let Some(parent_dir) = state_path.parent() {
+        fs::create_dir_all(parent_dir).map_err(|error| {
+            format!(
+                "Failed to create auto update state directory {}: {}",
+                parent_dir.display(),
+                error
+            )
+        })?;
+    }
+
+    let mut parsed = match fs::read_to_string(&state_path) {
+        Ok(raw) => match serde_json::from_str::<Value>(&raw) {
+            Ok(value) => value,
+            Err(error) => {
+                crate::append_desktop_log(&format!(
+                    "failed to parse auto update state {}: {}. resetting state file",
+                    state_path.display(),
+                    error
+                ));
+                empty_state_object()
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty_state_object(),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read auto update state {}: {}",
+                state_path.display(),
+                error
+            ));
+        }
+    };
+    if !parsed.is_object() {
+        crate::append_desktop_log(&format!(
+            "auto update state {} has non-object root; resetting state file",
+            state_path.display()
+        ));
+    }
+    let object = ensure_object(&mut parsed);
+    object.insert(
+        AUTO_UPDATE_CHECK_ENABLED_FIELD.to_string(),
+        Value::Bool(enabled),
+    );
+
+    let serialized = serde_json::to_string_pretty(&parsed)
+        .map_err(|error| format!("Failed to serialize auto update state: {error}"))?;
+    fs::write(&state_path, serialized).map_err(|error| {
+        format!(
+            "Failed to write auto update state {}: {}",
             state_path.display(),
             error
         )

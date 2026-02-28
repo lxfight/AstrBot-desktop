@@ -2,8 +2,9 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     append_desktop_log, append_restart_log, append_shutdown_log, restart_backend_flow,
-    tray_actions, tray_bridge_event, ui_dispatch, window_actions, BackendState,
-    DEFAULT_SHELL_LOCALE, TRAY_RESTART_BACKEND_EVENT,
+    runtime_paths, shell_locale, tray_actions, tray_bridge_event, tray_labels, ui_dispatch,
+    window_actions, AutoUpdateCheckState, BackendState, DEFAULT_SHELL_LOCALE,
+    TRAY_RESTART_BACKEND_EVENT,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +69,32 @@ pub fn handle_tray_menu_event(app_handle: &AppHandle, menu_id: &str) {
                     append_restart_log(&format!("backend restart from tray menu failed: {reason}"));
                 }
             });
+        }
+        Some(tray_actions::TrayMenuAction::ToggleAutoUpdateCheck) => {
+            let auto_update_state = app_handle.state::<AutoUpdateCheckState>();
+            let enabled = auto_update_state.toggle();
+            let packaged_root_dir = runtime_paths::default_packaged_root_dir();
+            match shell_locale::write_cached_auto_update_check_enabled(
+                enabled,
+                packaged_root_dir.as_deref(),
+            ) {
+                Ok(()) => {
+                    append_desktop_log(&format!(
+                        "tray toggled auto update check: {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    ));
+                }
+                Err(error) => {
+                    append_desktop_log(&format!(
+                        "failed to persist auto update check setting: {error}"
+                    ));
+                }
+            }
+            tray_labels::update_tray_menu_labels(
+                app_handle,
+                DEFAULT_SHELL_LOCALE,
+                append_desktop_log,
+            );
         }
         Some(tray_actions::TrayMenuAction::Quit) => {
             let state = app_handle.state::<BackendState>();

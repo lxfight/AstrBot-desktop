@@ -6,7 +6,7 @@ use tauri::{
 
 use crate::{
     append_desktop_log, runtime_paths, shell_locale, tray_actions, tray_labels, tray_menu_handler,
-    window_actions, TrayMenuState, DEFAULT_SHELL_LOCALE, TRAY_ID,
+    window_actions, AutoUpdateCheckState, TrayMenuState, DEFAULT_SHELL_LOCALE, TRAY_ID,
 };
 
 pub fn setup_tray(app_handle: &AppHandle) -> Result<(), String> {
@@ -23,6 +23,15 @@ pub fn setup_tray(app_handle: &AppHandle) -> Result<(), String> {
         shell_texts.tray_hide
     } else {
         shell_texts.tray_show
+    };
+    let auto_update_check_enabled = app_handle
+        .try_state::<AutoUpdateCheckState>()
+        .map(|state| state.is_enabled())
+        .unwrap_or(true);
+    let auto_update_check_label = if auto_update_check_enabled {
+        shell_texts.tray_auto_update_check_on
+    } else {
+        shell_texts.tray_auto_update_check_off
     };
 
     let toggle_item = MenuItem::with_id(
@@ -49,6 +58,14 @@ pub fn setup_tray(app_handle: &AppHandle) -> Result<(), String> {
         None::<&str>,
     )
     .map_err(|error| format!("Failed to create tray restart menu item: {error}"))?;
+    let auto_update_check_item = MenuItem::with_id(
+        app_handle,
+        tray_actions::TRAY_MENU_TOGGLE_AUTO_UPDATE_CHECK,
+        auto_update_check_label,
+        true,
+        None::<&str>,
+    )
+    .map_err(|error| format!("Failed to create tray auto update menu item: {error}"))?;
     let quit_item = MenuItem::with_id(
         app_handle,
         tray_actions::TRAY_MENU_QUIT,
@@ -66,6 +83,7 @@ pub fn setup_tray(app_handle: &AppHandle) -> Result<(), String> {
             &toggle_item,
             &reload_item,
             &restart_backend_item,
+            &auto_update_check_item,
             &separator,
             &quit_item,
         ],
@@ -76,6 +94,7 @@ pub fn setup_tray(app_handle: &AppHandle) -> Result<(), String> {
         toggle_item: toggle_item.clone(),
         reload_item: reload_item.clone(),
         restart_backend_item: restart_backend_item.clone(),
+        auto_update_check_item: auto_update_check_item.clone(),
         quit_item: quit_item.clone(),
     }) {
         append_desktop_log("tray menu state already exists, skipping manage");

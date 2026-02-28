@@ -1,6 +1,6 @@
 use tauri::{menu::MenuItem, AppHandle, Manager};
 
-use crate::{runtime_paths, shell_locale, tray_actions, TrayMenuState};
+use crate::{runtime_paths, shell_locale, tray_actions, AutoUpdateCheckState, TrayMenuState};
 
 fn set_menu_text_safe<F>(item: &MenuItem<tauri::Wry>, text: &str, item_name: &str, log: F)
 where
@@ -55,6 +55,15 @@ pub fn update_tray_menu_labels_with_visibility<F>(
     } else {
         shell_texts.tray_show
     };
+    let auto_update_check_enabled = app_handle
+        .try_state::<AutoUpdateCheckState>()
+        .map(|state| state.is_enabled())
+        .unwrap_or(true);
+    let auto_update_check_label = if auto_update_check_enabled {
+        shell_texts.tray_auto_update_check_on
+    } else {
+        shell_texts.tray_auto_update_check_off
+    };
 
     set_menu_text_safe(
         &tray_state.toggle_item,
@@ -72,6 +81,12 @@ pub fn update_tray_menu_labels_with_visibility<F>(
         &tray_state.restart_backend_item,
         shell_texts.tray_restart_backend,
         tray_actions::TRAY_MENU_RESTART_BACKEND,
+        &log,
+    );
+    set_menu_text_safe(
+        &tray_state.auto_update_check_item,
+        auto_update_check_label,
+        tray_actions::TRAY_MENU_TOGGLE_AUTO_UPDATE_CHECK,
         &log,
     );
     set_menu_text_safe(
