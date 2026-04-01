@@ -13,6 +13,7 @@ from .lib.release_artifacts import (
     ARTIFACT_EXTENSIONS,
     LOCALE_PATTERN,
     MACOS_CANONICAL_ARTIFACT_STEM_PATTERN,
+    SHORT_SHA_PATTERN,
     VERSION_PATTERN,
     WINDOWS_ARTIFACT_STEM_PATTERN_FRAGMENT,
 )
@@ -60,6 +61,12 @@ CANONICALIZE_RULES: dict[str, tuple[tuple[re.Pattern[str], str], ...]] = {
         (
             MACOS_CANONICAL_ARTIFACT_STEM_PATTERN,
             "AstrBot_{version}_macos_{arch}",
+        ),
+        (
+            re.compile(
+                rf"{WINDOWS_ARTIFACT_STEM_PATTERN_FRAGMENT}(?:-portable|_portable)(?P<nightly_suffix>_nightly_{SHORT_SHA_PATTERN})?$"
+            ),
+            "AstrBot_{version}_windows_{arch}_portable{nightly_suffix}",
         ),
     ),
     ".app.tar.gz": (
@@ -148,6 +155,10 @@ def strip_nightly_suffix(stem: str) -> str:
     return NIGHTLY_HASH_PATTERN.sub("", stem)
 
 
+def should_preserve_original_nightly_suffix(stem: str, ext: str) -> bool:
+    return ext == ".zip" and ("_portable" in stem or "-portable" in stem)
+
+
 def canonicalize_stem(
     stem: str, ext: str, warned_unknown_arches: set[str]
 ) -> tuple[str, bool]:
@@ -155,7 +166,7 @@ def canonicalize_stem(
         match = pattern.fullmatch(stem)
         if not match:
             continue
-        groups = match.groupdict()
+        groups = {key: value or "" for key, value in match.groupdict().items()}
         if "arch" in groups:
             groups["arch"] = normalize_arch(groups["arch"], warned_unknown_arches)
         return normalized_template.format(**groups), True
@@ -228,11 +239,21 @@ def main() -> int:
 
         original_name = path.name
         original_stem = strip_extension(original_name, ext)
+        canonical_ext = canonicalization_extension(ext)
 
         stripped_stem = strip_nightly_suffix(original_stem)
-        normalized_stem, matched = canonicalize_stem(
-            stripped_stem, canonicalization_extension(ext), warned_unknown_arches
-        )
+        candidate_stems = [stripped_stem]
+        if should_preserve_original_nightly_suffix(original_stem, canonical_ext):
+            candidate_stems.insert(0, original_stem)
+
+        normalized_stem = original_stem
+        matched = False
+        for candidate_stem in candidate_stems:
+            normalized_stem, matched = canonicalize_stem(
+                candidate_stem, canonical_ext, warned_unknown_arches
+            )
+            if matched:
+                break
 
         if not matched:
             unmatched_messages.append(
