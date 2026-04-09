@@ -17,6 +17,8 @@ pub(crate) enum PageLoadAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunEventAction {
     None,
+    #[cfg(target_os = "macos")]
+    ShowMainWindow,
     HandleExitRequested,
     HandleExit,
 }
@@ -63,8 +65,22 @@ pub(crate) fn page_load_action(
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn reopen_event_action(has_visible_windows: bool) -> RunEventAction {
+    if has_visible_windows {
+        RunEventAction::None
+    } else {
+        RunEventAction::ShowMainWindow
+    }
+}
+
 pub(crate) fn run_event_action(event: &RunEvent) -> RunEventAction {
     match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } => reopen_event_action(*has_visible_windows),
         RunEvent::ExitRequested { .. } => RunEventAction::HandleExitRequested,
         RunEvent::Exit => RunEventAction::HandleExit,
         _ => RunEventAction::None,
@@ -78,6 +94,9 @@ mod tests {
         RunEventAction,
     };
     use tauri::{webview::PageLoadEvent, RunEvent};
+
+    #[cfg(target_os = "macos")]
+    use super::reopen_event_action;
 
     #[test]
     fn main_window_action_ignores_non_main_windows() {
@@ -117,6 +136,13 @@ mod tests {
             page_load_action(PageLoadEvent::Finished, false, true),
             PageLoadAction::ApplyStartupLoadingMode
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reopen_event_action_shows_main_window_only_when_no_window_is_visible() {
+        assert_eq!(reopen_event_action(false), RunEventAction::ShowMainWindow);
+        assert_eq!(reopen_event_action(true), RunEventAction::None);
     }
 
     #[test]
